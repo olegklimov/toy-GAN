@@ -70,18 +70,39 @@ class Gan:
 		class1 = d2(z)
 
 		latent = Input( batch_shape=(None,50), name="latent" )
-		#latent
 
 		self.model = Model( input=inp, output=class1 )
+		def modified_categorical_crossentropy(y_true, y_pred):
+			y_pred *= 0.9
+			_EPSILON = K.epsilon()
+			return K.mean(K.sum(-y_true*K.log(K.clip(y_pred, _EPSILON, 1-_EPSILON)), axis=-1))
 		self.model.compile(
 			optimizer=Adam(lr=0.002, beta_2=0.999),
-			loss='categorical_crossentropy',
+			loss=modified_categorical_crossentropy,
 			metrics=['accuracy'])
+
 
 gan = Gan()
 cursor = 1e10
 epoch = 0
 gan.model.summary()
+
+import scipy
+import scipy.misc
+import scipy.misc.pilutil
+
+def batch_to_jpeg(batch, fn="test.png"):
+	BATCH = batch.shape[0]
+	W = batch.shape[-1]
+	H = batch.shape[-2]
+	side = int( np.ceil(np.sqrt(BATCH)) )
+	pic = np.zeros( shape=(3,side*H,side*W) )
+	for y in range(side):
+		for x in range(side):
+			i = y*side + x
+			if i > BATCH: break
+			pic[:, y*H:(y+1)*H, x*W:(x+1)*W] = batch[i]
+	scipy.misc.toimage(pic, cmin=0.0, cmax=1.0).save(fn)
 
 while 1:
 	if cursor+BATCH > X_train.shape[0]:
@@ -91,14 +112,15 @@ while 1:
 		cursor = 0
 		epoch += 1
 		loss, acc = gan.model.evaluate( X_test, y_test, batch_size=BATCH)
-		print "e%i test loss=%0.3f acc=%0.3f" % (epoch, loss, acc)
+		print "e%i test ---- loss=%0.3f acc=%0.2f%%" % (epoch, loss, acc*100)
 
 	x = shuffled_x_train[cursor:cursor+BATCH]
 	y = shuffled_y_train[cursor:cursor+BATCH]
 
 	loss, acc = gan.model.train_on_batch( x, y )
 	if cursor % 10000 == 0:
-		print "e%i:%05i loss=%0.3f acc=%0.3f" % (epoch, cursor, loss, acc)
+		print "e%i:%05i loss=%0.3f acc=%0.2f%%" % (epoch, cursor, loss, acc*100)
+		batch_to_jpeg( shuffled_x_train[:BATCH] )
 
 	cursor += BATCH
 
