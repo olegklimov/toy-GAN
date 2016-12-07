@@ -96,21 +96,23 @@ class Gan:
 		g = dec2_bn(dec2(g))
 		g = dec3_bn(dec3(g))
 		g = dec4(g)
-		fake_merged_with_real = merge( [inp,g], mode='concat', concat_axis=0 )
-		z = b1(conv1(fake_merged_with_real))
-		z = b2(conv2(z))
-		z = b3(conv3(z))
-		z = b4(conv4(z))
-		z = b5(conv5(z))
-		z = b6(conv6(z))
-		z = d1(flat(z))
-		class_discr = d2(z)
+		self.generator_only_model = Model( input=latent, output=g )
 
-		self.discriminator_model = Model( input=[inp,latent], output=class_discr )
-		self.discriminator_model.compile(
-			optimizer=Adam(lr=0.002, beta_2=0.999),
-			loss=modified_categorical_crossentropy,
-			metrics=['accuracy'])
+		#fake_merged_with_real = merge( [inp,g], mode='concat', concat_axis=0 )
+		#z = b1(conv1(fake_merged_with_real))
+		#z = b2(conv2(z))
+		#z = b3(conv3(z))
+		#z = b4(conv4(z))
+		#z = b5(conv5(z))
+		#z = b6(conv6(z))
+		#z = d1(flat(z))
+		#class_discr = d2(z)
+
+		#self.discriminator_model = Model( input=[inp,latent], output=class_discr )
+		#self.discriminator_model.compile(
+		#	optimizer=Adam(lr=0.002, beta_2=0.999),
+		#	loss=modified_categorical_crossentropy,
+		#	metrics=['accuracy'])
 
 		for x in [conv1,b1,conv2,b2,conv3,b3,conv4,b4,conv5,b5,conv6,b6,d1,d2]:
 			x.trainable = False   # should do it before compiling generator
@@ -143,30 +145,34 @@ import scipy.misc.pilutil
 
 def batch_to_jpeg(batch, labels, fn="test.png"):
 	BATCH = batch.shape[0]
+	batch_labels_text = []
+	for b in range(BATCH):
+		batch_labels_text.append( labels_text[labels[b].argmax()] )
 	W = batch.shape[-1]
 	H = batch.shape[-2]
-	side = int( np.ceil(np.sqrt(BATCH)) )
+	hor_n = 10
+	ver_n = int( np.ceil(BATCH/hor_n) )
 	BIG_W = W + 32
-	BIG_H = H + 20
-	pic = np.ones( shape=(3,side*BIG_H,side*BIG_W) )
+	BIG_H = H + 16
+	pic = np.ones( shape=(3,ver_n*BIG_H,hor_n*BIG_W) )
 
 	import PIL
 	import PIL.Image as Image
 	import PIL.ImageDraw as ImageDraw
 	import PIL.ImageFont as ImageFont
 	font = ImageFont.truetype('/usr/share/fonts/truetype/freefont/FreeSansBold.ttf', 10)
-	for y in range(side):
-		for x in range(side):
-			i = y*side + x
-			if i > BATCH: break
+	for y in range(ver_n):
+		for x in range(hor_n):
+			i = y*hor_n + x
+			if i >= BATCH: break
 			pic[:, y*BIG_H:y*BIG_H+H, x*BIG_W:x*BIG_W+W] = batch[i]
 	image = scipy.misc.toimage(pic, cmin=-1.0, cmax=1.0)
 	draw = ImageDraw.Draw(image)
-	for y in range(side):
-		for x in range(side):
-			i = y*side + x
-			if i > BATCH: break
-			draw.text((x*BIG_W, y*BIG_H+H), labels[i], font=font, fill='rgb(0, 0, 0)')
+	for y in range(ver_n):
+		for x in range(hor_n):
+			i = y*hor_n + x
+			if i >= BATCH: break
+			draw.text((x*BIG_W, y*BIG_H+H), batch_labels_text[i], font=font, fill='rgb(0, 0, 0)')
 	image.save(fn)
 
 cursor = 1e10
@@ -178,20 +184,45 @@ while 1:
 		shuffled_y_train = y_train[sh]
 		cursor = 0
 		epoch += 1
-		loss, acc = gan.class_model.evaluate( X_test, y_test, batch_size=BATCH )
-		print "e%i test ---- loss=%0.3f acc=%0.2f%%" % (epoch, loss, acc*100)
+		#loss, acc = gan.class_model.evaluate( X_test, y_test, batch_size=BATCH )
+		#print "e%i test ---- loss=%0.3f acc=%0.2f%%" % (epoch, loss, acc*100)
 
 	x = shuffled_x_train[cursor:cursor+BATCH]
 	y = shuffled_y_train[cursor:cursor+BATCH]
+	cursor += BATCH
 
-	loss, acc = gan.class_model.train_on_batch( x, y )
-	if cursor % 10000 == 0:
+	x_merged = np.zeros( shape=(BATCH*2, 3, H, W) )
+	x_merged[:BATCH] = x
+	y_discrm = np.zeros( shape=(BATCH*2, LABELS+1) )
+	y_discrm[:BATCH] = y
+	y_genera = np.zeros( shape=(BATCH, LABELS+1) )
+	latent = np.random.normal(0, 1, size=(BATCH,LATENT))
+	for b in range(BATCH):
+		i = latent[b,:LABELS].argmax()
+		latent[b,:LABELS] = 0
+		latent[b,i] = 1
+		y_genera[b,i] = 1            # generator should try to improve classification towards i
+		y_discrm[BATCH+b,LABELS] = 1 # discriminator should try to improve towards FAKE
+	x_merged[BATCH:] = gan.generator_only_model.predict(latent)
+
+	classifier_only = False
+	if not classifier_only:
+		x = x_merged
+		y = y_discrm
+
+	loss, acc = gan.class_model.train_on_batch(x, y)
+	if cursor % 5000 == 0:
 		print "e%i:%05i loss=%0.3f acc=%0.2f%%" % (epoch, cursor, loss, acc*100)
 		labels = gan.class_model.predict( x )
-		batch_labels_text = []
-		for b in range(BATCH):
-			batch_labels_text.append( labels_text[labels[b].argmax()] )
-		batch_to_jpeg( x, batch_labels_text )
+		batch_to_jpeg(x_merged, y_discrm, "discriminator_task.png")
+		batch_to_jpeg(x, labels, "classifier.png")
 
-	cursor += BATCH
+	if classifier_only: continue
+
+	loss, acc = gan.generator_fool_model.train_on_batch(latent, y_genera)
+	if cursor % 5000 == 0:
+		print "generator loss=%0.3f acc=%0.2f%%" % (loss, acc*100)
+		batch_to_jpeg(x_merged[BATCH:], y_genera, "generator.png")
+		labels = gan.class_model.predict( x_merged[BATCH:] )
+		batch_to_jpeg(x_merged[BATCH:], labels, "generator-real.png")
 
