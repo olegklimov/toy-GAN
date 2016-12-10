@@ -17,93 +17,134 @@ from keras.regularizers import l2, activity_l1l2, activity_l1, activity_l2
 from keras.layers.core import Dense, Lambda, Activation, ActivityRegularization, Flatten, Reshape
 from keras.layers.convolutional import Convolution2D, Deconvolution2D, UpSampling2D
 from keras.layers.normalization import BatchNormalization
+from keras.layers.advanced_activations import PReLU, LeakyReLU
 from keras.layers import Merge, merge, Input
 from keras.models import Sequential, Model
 from keras.engine import Layer
 from keras.optimizers import SGD, Adagrad, Adam, Adamax, RMSprop
 from keras.constraints import nonneg
-from keras.datasets import cifar10
+import keras.metrics
 import scipy
 import scipy.misc
 import scipy.misc.pilutil
 
-(X_train, y_train), (X_test, y_test) = cifar10.load_data()
-
-#print(X_train.shape)  # (50000, 3, 32, 32)
-#print(y_train)        # (50000, 1)            [[0], [1], [9]]  
-
 BATCH  = 50
 LATENT = 150
-H,W = X_train.shape[-2:]
+H,W = 32,32
+print("HxW=%ix%i" % (W,H))
 LABELS = 10
-labels_text = "airplane automobile bird cat deer dog frog horse ship truck FAKE".split()
+
+if 0:
+	import keras.datasets.cifar10
+	(X_train, y_train), (X_test, y_test) = keras.datasets.cifar10.load_data()
+	labels_text = "airplane automobile bird cat deer dog frog horse ship truck FAKE".split()
+	COLORS = 3
+else:
+	import keras.datasets.mnist
+	(X_train_, y_train), (X_test_, y_test) = keras.datasets.mnist.load_data()
+	labels_text = "0 1 2 3 4 5 6 7 8 9 FAKE".split()
+	X_train = np.zeros( (len(X_train_),1,32,32) )
+	X_test  = np.zeros( (len(X_test_),1,32,32) )
+	X_train[:,0,2:30,2:30] = X_train_
+	X_test[:,0,2:30,2:30] = X_test_
+	COLORS = 1
+
+print(X_train.shape)  # (50000, 3, 32, 32)
+print(y_train)        # (50000, 1)            [[0], [1], [9]]  
 
 X_train = X_train.astype('float32')
 X_test  = X_test.astype('float32')
 X_train /= 128
 X_train -= 1.0
+X_train *= 0.9
 X_test  /= 128
 X_test  -= 1.0
+X_test  *= 0.9
+
+#X_train = X_train.reshape( (len(X_train),COLORS,H,W) )
+y_train = y_train.reshape( (len(y_train),1) )
+#X_test = X_test.reshape( (len(X_test),COLORS,H,W) )
+y_test = y_test.reshape( (len(y_test),1) )
 
 y_train = np_utils.to_categorical(y_train, LABELS+1).astype('float32')
 y_test  = np_utils.to_categorical(y_test,  LABELS+1).astype('float32')
 
 class Gan:
 	def __init__(self):
-		self.class_model = Sequential()
-		self.class_model.add(Convolution2D(32, 3, 3, activation='relu', border_mode='same', batch_input_shape=(None,3,H,W)))
-		self.class_model.add(BatchNormalization(mode=0, axis=1))
-		self.class_model.add(Convolution2D(64, 3, 3, activation='relu', subsample=(2,2), border_mode='same'))
-		self.class_model.add(BatchNormalization(mode=0, axis=1))
-		self.class_model.add(Convolution2D(64, 3, 3, activation='relu', border_mode='same'))
-		self.class_model.add(BatchNormalization(mode=0, axis=1))
-		self.class_model.add(Convolution2D(128, 3, 3, activation='relu', subsample=(2,2), border_mode='same'))
-		self.class_model.add(BatchNormalization(mode=0, axis=1))
-		self.class_model.add(Convolution2D(128, 3, 3, activation='relu', border_mode='same'))
-		self.class_model.add(BatchNormalization(mode=0, axis=1))
-		self.class_model.add(Convolution2D(256, 3, 3, activation='relu', subsample=(2,2), border_mode='same'))
-		self.class_model.add(BatchNormalization(mode=0, axis=1))
-		self.class_model.add(Flatten())
-		self.class_model.add(Dense(256, activation='relu'))
-		self.class_model.add(Dense(LABELS+1, activation='softmax'))
+		self.conv = Sequential()
+		self.conv.add(Convolution2D(32, 3, 3, activation='relu', border_mode='same', batch_input_shape=(None,COLORS,H,W)))
+		self.conv.add(BatchNormalization(mode=0, axis=1))
+		self.conv.add(Convolution2D(64, 3, 3, activation='relu', subsample=(2,2), border_mode='same'))
+		self.conv.add(BatchNormalization(mode=0, axis=1))
+		self.conv.add(Convolution2D(64, 3, 3, activation='relu', border_mode='same'))
+		self.conv.add(BatchNormalization(mode=0, axis=1))
+		self.conv.add(Convolution2D(128, 3, 3, activation='relu', subsample=(2,2), border_mode='same'))
+		self.conv.add(BatchNormalization(mode=0, axis=1))
+		self.conv.add(Convolution2D(128, 3, 3, activation='relu', border_mode='same'))
+		self.conv.add(BatchNormalization(mode=0, axis=1))
+		self.conv.add(Convolution2D(256, 3, 3, activation='relu', subsample=(2,2), border_mode='same'))
+		self.conv.add(BatchNormalization(mode=0, axis=1))
+		self.conv.add(Flatten())
 
-		def modified_categorical_crossentropy(y_true, y_pred):
-			y_pred *= 0.9/K.sum(y_pred, axis=-1, keepdims=True)
-			_EPSILON = K.epsilon()
-			return K.mean(K.sum(-y_true*K.log(K.clip(y_pred, _EPSILON, 1-_EPSILON)), axis=-1))
+		self.real_or_fake_model = Sequential()
+		self.real_or_fake_model.add(self.conv)
+		self.real_or_fake_model.add(Dense(256, activation='relu'))
+		self.real_or_fake_model.add(Dense(2, activation='softmax'))
+
+		self.additional_model.add(self.conv)
+		self.additional_model.add(Dense(256, activation='relu'))
+		self.additional_model.add(Dense(LABELS+1, activation='softmax'))
+
+		self.additional_model = Sequential()
+
+		#def modified_categorical_crossentropy(y_true, y_pred):
+		#	_EPSILON = K.epsilon()
+		#	return K.mean(K.sum(-y_true*K.log(K.clip(
+		#		0.1 + y_pred*0.9/K.sum(y_pred, axis=-1, keepdims=True),
+		#		_EPSILON, 1-_EPSILON)), axis=-1))
+
+
 		self.class_model.compile(
 			optimizer=Adam(lr=0.0002, beta_2=0.999),
-			loss=modified_categorical_crossentropy,
-			metrics=['accuracy'])
+			loss="categorical_crossentropy",
+			#loss=modified_categorical_crossentropy,
+			metrics=['categorical_accuracy'])
 		self.class_model.train_on_batch( X_train[:1], y_train[:1] )  # this "finishes" the compilation
 		for x in self.class_model.layers:
 			x.trainable = False   # should do it before compiling generator
 
+		alpha = 0.1
 		self.generator_only_model = Sequential()
-		self.generator_only_model.add(Dense(256, activation='relu', batch_input_shape=(None,LATENT)))
-		self.generator_only_model.add(Dense(256*W//8*H//8, activation='relu'))
-		self.generator_only_model.add(Reshape( (256,H//8,W//8) ))
+		self.generator_only_model.add(Dense(1024, batch_input_shape=(None,LATENT)))
+		self.generator_only_model.add(LeakyReLU(alpha))
+		self.generator_only_model.add(Dense(1024*W//8*H//8))
+		self.generator_only_model.add(LeakyReLU(alpha))
+		self.generator_only_model.add(Reshape( (1024,H//8,W//8) ))
 		self.generator_only_model.add(UpSampling2D( size=(2,2) ))
-		self.generator_only_model.add(Convolution2D(128, 3,3, activation='relu', border_mode='same', init="glorot_normal"))
+		self.generator_only_model.add(Convolution2D(128, 3,3, border_mode='same', init="glorot_normal"))
+		self.generator_only_model.add(LeakyReLU(alpha))
 		#self.generator_only_model.add(BatchNormalization(mode=0, axis=1))
 		self.generator_only_model.add(UpSampling2D( size=(2,2) ))
-		self.generator_only_model.add(Convolution2D(64, 3,3, activation='relu', border_mode='same', init="glorot_normal"))
+		self.generator_only_model.add(Convolution2D(64, 3,3, border_mode='same', init="glorot_normal"))
+		self.generator_only_model.add(LeakyReLU(alpha))
 		#self.generator_only_model.add(BatchNormalization(mode=0, axis=1))
 		self.generator_only_model.add(UpSampling2D( size=(2,2) ))
-		self.generator_only_model.add(Convolution2D(32, 3,3, activation='relu', border_mode='same', init="glorot_normal"))
+		self.generator_only_model.add(Convolution2D(32, 3,3, border_mode='same', init="glorot_normal"))
+		self.generator_only_model.add(LeakyReLU(alpha))
 		#self.generator_only_model.add(BatchNormalization(mode=0, axis=1))
-		self.generator_only_model.add(Convolution2D(3, 3,3, activation='tanh', border_mode='same', init="glorot_normal"))
+		self.generator_only_model.add(Convolution2D(COLORS, 3,3, activation='tanh', border_mode='same', init="glorot_normal"))
 
 		self.class_model.trainable = False
 		latent = Input( batch_shape=(None,LATENT), name="latent" )
 		g = self.generator_only_model(latent)
 		class_generator = self.class_model(g)
 
-		self.generator_fool_model = Model( input=latent, output=class_generator )
+		self.generator_fool_model = Model( input=latent, output=[real_or_fake, additional] )
 		self.generator_fool_model.compile(
-			optimizer=Adam(lr=0.001, beta_2=0.999),
-			loss=modified_categorical_crossentropy,
-			metrics=['accuracy'])
+			optimizer=Adam(lr=0.00002, beta_2=0.999),
+			loss=["binary_crossentropy", "categorical_crossentropy"],
+			#loss=modified_categorical_crossentropy
+			)
 		prob1 = self.class_model.predict(X_train[:1])
 		self.generator_fool_model.train_on_batch( np.random.normal(0, 1, size=(1,LATENT)), y_train[:1] )
 		prob2 = self.class_model.predict(X_train[:1])
@@ -139,7 +180,12 @@ def batch_to_jpeg(batch, labels, fn="ramdisk/test.png"):
 		for x in range(hor_n):
 			i = y*hor_n + x
 			if i >= BATCH: break
-			pic[:, y*BIG_H:y*BIG_H+H, x*BIG_W:x*BIG_W+W] = batch[i]
+			if COLORS==1:
+				pic[0, y*BIG_H:y*BIG_H+H, x*BIG_W:x*BIG_W+W] = batch[i]
+				pic[1, y*BIG_H:y*BIG_H+H, x*BIG_W:x*BIG_W+W] = batch[i]
+				pic[2, y*BIG_H:y*BIG_H+H, x*BIG_W:x*BIG_W+W] = batch[i]
+			else:
+				pic[:, y*BIG_H:y*BIG_H+H, x*BIG_W:x*BIG_W+W] = batch[i]
 	image = scipy.misc.toimage(pic, cmin=-1.0, cmax=1.0)
 	draw = ImageDraw.Draw(image)
 	for y in range(ver_n):
@@ -154,8 +200,9 @@ def train(gan):
 	epoch = 0
 	same_x = X_train[:BATCH]
 	same_latent = None
-	x_merged = np.zeros( shape=(BATCH*2, 3, H, W) )
+	x_merged = np.zeros( shape=(BATCH*2, COLORS, H, W) )
 	y_discrm = np.zeros( shape=(BATCH*2, LABELS+1) )
+	y_genera = np.zeros( shape=(BATCH, LABELS+1) )
 	while 1:
 		if cursor+BATCH > X_train.shape[0]:
 			sh = np.random.choice( X_train.shape[0], size=X_train.shape[0], replace=False )
@@ -163,8 +210,9 @@ def train(gan):
 			shuffled_y_train = y_train[sh]
 			cursor = 0
 			epoch += 1
-			#loss, acc = gan.class_model.evaluate( X_test, y_test, batch_size=BATCH )
-			#print("e%i test ---- loss=%0.3f acc=%0.2f%%" % (epoch, loss, acc*100))
+
+			loss, acc = gan.class_model.evaluate( X_test, y_test, batch_size=BATCH )
+			print("e%i test ---- loss=%0.3f acc=%0.2f%%" % (epoch, loss, acc*100))
 
 			if epoch > 1:
 				import shutil
@@ -180,20 +228,26 @@ def train(gan):
 
 		ts1 = time.time()
 		x_merged[:BATCH] = x
-		y_discrm[:BATCH] = y
-		y_genera = np.zeros( shape=(BATCH, LABELS+1) )
+		y_discrm[:] = np.random.uniform( low=0, high=0.2, size=(2*BATCH, LABELS+1) )
+		y_discrm[:BATCH] += 0.8*y
+		#y_discrm[BATCH:] = 0.1/(LABELS+1)
+		y_genera[:] = np.random.uniform( low=0, high=0.2, size=(BATCH, LABELS+1) )
 		latent = np.random.normal(0, 1, size=(BATCH,LATENT))
+		#latent = np.random.uniform(low=-1, high=1, size=(BATCH,LATENT))
 		for b in range(BATCH):
 			i = latent[b,:LABELS].argmax()
 			latent[b,:LABELS] = 0
 			latent[b,i] = 1
-			y_genera[b,i] = 1            # generator should try to improve classification towards i
-			y_discrm[BATCH+b,LABELS] = 1 # discriminator should try to improve towards FAKE
+			y_genera[b,i] += 0.9             # generator should try to improve classification towards i
+			y_discrm[BATCH+b,LABELS] += 0.9  # discriminator should try to improve towards FAKE
 		if same_latent is None:
 			same_latent = latent[:BATCH]
 
 		x_merged[BATCH:] = gan.generator_only_model.predict(latent)  ###
 		ts2 = time.time()
+
+		#batch_to_jpeg(x_merged, y_discrm, "ramdisk/_discr-labels.png")
+		#batch_to_jpeg(x_merged[BATCH:], y_genera, "ramdisk/_genera-labels.png")
 
 		classifier_only = False
 		if not classifier_only:
@@ -210,9 +264,22 @@ def train(gan):
 
 		if classifier_only: continue
 
-		#labels1 = gan.generator_fool_model.predict( latent[:1] )
 		gan.class_model.trainable = False
-		loss, acc = gan.generator_fool_model.train_on_batch(latent, y_genera)  ###
+		#print(y_genera[:1])
+		#print(labels1[:1])
+		loss = gan.generator_fool_model.train_on_batch(latent, y_genera)  ###
+		labels1 = gan.generator_fool_model.predict( latent )
+		loss = 0.0
+		acc = 0
+		fake = 0
+		for b in range(BATCH):
+			ans = labels1[b].argmax()
+			need = y_genera[b].argmax()
+			if ans==need: acc += 1
+			if ans==LABELS: fake += 1
+			loss += -np.log(labels1[b,need]) * (1.0/BATCH)
+		print("ans=%i need=%i acc=%i fake=%i loss=%0.2f" % (ans, need, acc, fake, loss))
+
 		gan.class_model.trainable = True
 		ts4 = time.time()
 
