@@ -102,7 +102,24 @@ def conv_layer(input, kernel_shape, bias_shape, stride=1, act_fun=tf.nn.relu):
 	weights = tf.get_variable("weights", kernel_shape, initializer=glorot_normal(kernel_shape))
 	biases  = tf.get_variable("biases", bias_shape, initializer=tf.constant_initializer(0.0))
 	conv    = tf.nn.convolution(input, weights, strides=[stride,stride], padding='SAME')
-	return act_fun(conv + biases)
+	pre_act = conv + biases
+	act = act_fun(pre_act)
+	#pic_shape = act.get_shape()
+	n_out = kernel_shape[-1]
+
+
+	#bn_mean     = tf.get_variable("bn_mean", batch_mean, initializer=tf.constant_initializer(0.0))
+	#bn_variance = tf.get_variable("bn_variance", batch_var, initializer=tf.constant_initializer(0.5))
+	#beta  = tf.Variable(tf.constant(0.0, shape=[n_out]), name='beta',  trainable=False)
+        #gamma = tf.Variable(tf.constant(1.0, shape=[n_out]), name='gamma', trainable=False)
+	#ema = tf.train.ExponentialMovingAverage(decay=0.5)
+
+	batch_mean, batch_var = tf.nn.moments(act, [0,1,2], name='moments', keep_dims=True)
+	#for so-called "global normalization", used with convolutional filters with shape [batch, height, width, depth], pass axes=[0, 1, 2].
+	#for simple batch normalization pass axes=[0] (batch only).
+
+	bn = tf.nn.batch_normalization(act, batch_mean, batch_var, offset=None, scale=None, variance_epsilon=0.01, name="bn")
+	return bn
 
 def do_all():
 	config = tf.ConfigProto()
