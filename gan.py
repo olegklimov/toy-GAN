@@ -61,9 +61,7 @@ X_test  /= 128
 X_test  -= 1.0
 X_test  *= 0.9
 
-#X_train = X_train.reshape( (len(X_train),COLORS,H,W) )
 y_train = y_train.reshape( (len(y_train),1) )
-#X_test = X_test.reshape( (len(X_test),COLORS,H,W) )
 y_test = y_test.reshape( (len(y_test),1) )
 
 y_train = np_utils.to_categorical(y_train, LABELS+1).astype('float32')
