@@ -14,13 +14,13 @@ LOG_DIR = "ramdisk/log"
 LATENT = 150
 LABELS = 10
 
+# rescale to -0.95 .. +0.95
 dataset.X_train *= 2.0
 dataset.X_train -= 1.0
-dataset.X_train *= 0.95  # scale to -0.95 .. +0.95
-#for y in range(dataset.H): print( dataset.X_train[0,y,:,:] )
+dataset.X_train *= 0.95
 dataset.X_test *= 2.0
 dataset.X_test -= 1.0
-dataset.X_test *= 0.90
+dataset.X_test *= 0.95
 
 def glorot_normal(shape):
 	s = np.sqrt(2. / (shape[-1] + shape[-2]))
@@ -133,15 +133,6 @@ def do_all():
 		keep_prob = tf.placeholder(tf.float32)
 		tf.summary.image('input', x, 4)
 
-	def feed_dict(train):
-		if train:
-			xs, ys = dataset.next_batch()
-			k = 0.7
-		else:
-			xs, ys = dataset.X_test, dataset.y_test
-			k = 1.0
-		return { x: xs, y_true: ys, keep_prob: k }
-
 	disc_wide_code, disc_width = discriminator_network(x, keep_prob)
 
 	with tf.variable_scope("dense_to_classes"):
@@ -167,6 +158,16 @@ def do_all():
 	train_writer = tf.summary.FileWriter(LOG_TRAIN_DIR, sess.graph)
 	test_writer = tf.summary.FileWriter(LOG_TEST_DIR)
 	tf.global_variables_initializer().run()
+
+
+	def feed_dict(train):
+		if train:
+			xs, ys = dataset.next_batch()
+			k = 0.7
+		else:
+			xs, ys = dataset.X_test, dataset.y_test
+			k = 1.0
+		return { x: xs, y_true: ys, keep_prob: k }
 
 	ts1 = 0
 	for i in range(MAX_STEPS):
