@@ -2,60 +2,22 @@ import argparse, sys, time
 import tensorflow as tf
 import numpy as np
 
+import datasets
+dataset = datasets.Dataset()
+dataset.BATCH = 100
+datasets.mnist(dataset)
+#cifar10()
+print("HxW=%ix%i" % (dataset.W,dataset.H))
 
 MAX_STEPS = 5000
 LOG_DIR = "ramdisk/log"
-BATCH  = 100
-
 LATENT = 150
-H,W = 32,32
-print("HxW=%ix%i" % (W,H))
 LABELS = 10
-
-class Dataset:
-	def __init__(self):
-		self.cursor = 1e10
-		self.epoch = 0
-	def next_batch(self):
-		if self.cursor+BATCH > self.X_train.shape[0]:
-			sh = np.random.choice( self.X_train.shape[0], size=self.X_train.shape[0], replace=False )
-			self.shuffled_x_train = self.X_train[sh]
-			self.shuffled_y_train = self.y_train[sh]
-			self.cursor = 0
-			self.epoch += 1
-		x = self.shuffled_x_train[self.cursor:self.cursor+BATCH]
-		y = self.shuffled_y_train[self.cursor:self.cursor+BATCH]
-		self.cursor += BATCH
-		return x, y
-
-dataset = Dataset()
-
-def mnist():
-	labels_text = "0 1 2 3 4 5 6 7 8 9 FAKE".split()
-	dataset.COLORS = 1
-	from tensorflow.examples.tutorials.mnist import input_data
-	mnist = input_data.read_data_sets("ramdisk/data", one_hot=True)
-	# train
-	dataset.X_train = np.zeros( (len(mnist.train.images),H,W,1) )
-	dataset.X_train[:,2:30,2:30,:] = mnist.train.images.reshape( (-1,28,28,1) )
-	dataset.y_train = mnist.train.labels
-	# test
-	dataset.X_test  = np.zeros( (len(mnist.test.images),H,W,1) )
-	dataset.X_test[:,2:30,2:30,:] = mnist.test.images.reshape( (-1,28,28,1) )
-	dataset.y_test  = mnist.test.labels
-
-def cirar10():
-	labels_text = "airplane automobile bird cat deer dog frog horse ship truck FAKE".split()
-	dataset.COLORS = 3
-	import keras.datasets.cifar10
-	(X_train, y_train), (X_test, y_test) = keras.datasets.cifar10.load_data()
-
-mnist()
 
 dataset.X_train *= 2.0
 dataset.X_train -= 1.0
 dataset.X_train *= 0.95  # scale to -0.95 .. +0.95
-#for y in range(H): print( dataset.X_train[0,y,:,:] )
+#for y in range(dataset.H): print( dataset.X_train[0,y,:,:] )
 dataset.X_test *= 2.0
 dataset.X_test -= 1.0
 dataset.X_test *= 0.90
@@ -75,17 +37,13 @@ def variable_summaries(var):
 		tf.summary.scalar('min', tf.reduce_min(var))
 		tf.summary.histogram('histogram', var)
 
-def bias_variable(shape):
-	initial = tf.constant(0.0, shape=shape)
-	return tf.Variable(initial)
-
 def dense_layer(input_tensor, input_dim, output_dim, layer_name, act_fun=tf.nn.relu):
 	with tf.name_scope(layer_name):
 		with tf.name_scope('weights'):
 			weights = tf.get_variable("weights", [input_dim, output_dim], initializer=glorot_normal([input_dim, output_dim]))
 			variable_summaries(weights)
 		with tf.name_scope('biases'):
-			biases = bias_variable([output_dim])
+			biases = tf.get_variable("bias_variable", [output_dim], initializer=tf.constant_initializer(0.0))
 			variable_summaries(biases)
 		with tf.name_scope('Wx_plus_b'):
 			preactivate = tf.matmul(input_tensor, weights) + biases
@@ -108,6 +66,7 @@ def conv_layer(input, kernel_shape, bias_shape, stride=1, act_fun=tf.nn.relu):
 	#beta  = tf.Variable(tf.constant(0.0, shape=[n_out]), name='beta',  trainable=False)
         #gamma = tf.Variable(tf.constant(1.0, shape=[n_out]), name='gamma', trainable=False)
 	#ema = tf.train.ExponentialMovingAverage(decay=0.5)
+	# https://gist.github.com/tomokishii/0ce3bdac1588b5cca9fa5fbdf6e1c412
 
 	batch_mean, batch_var = tf.nn.moments(pre_act, [0,1,2], name='moments', keep_dims=True)
 	#for so-called "global normalization", used with convolutional filters with shape [batch, height, width, depth], pass axes=[0, 1, 2].
@@ -116,28 +75,9 @@ def conv_layer(input, kernel_shape, bias_shape, stride=1, act_fun=tf.nn.relu):
 	bn = tf.nn.batch_normalization(pre_act, batch_mean, batch_var, offset=None, scale=None, variance_epsilon=0.01, name="bn")
 	return act_fun(bn)
 
-def do_all():
-	config = tf.ConfigProto()
-	config.gpu_options.allow_growth = True
-	#config=tf.ConfigProto(log_device_placement=True))
-	sess = tf.InteractiveSession(config=config)
-
-	with tf.name_scope('input'):
-		x = tf.placeholder(tf.float32, [None,H,W,1], name='x-input')
-		y_true = tf.placeholder(tf.float32, [None,LABELS], name='y-input')
-		tf.summary.image('input', x, 4)
-
-	def feed_dict(train):
-		if train:
-			xs, ys = dataset.next_batch()
-			k = 0.7
-		else:
-			xs, ys = dataset.X_test, dataset.y_test
-			k = 1.0
-		return { x: xs, y_true: ys, keep_prob: k }
-
+def discriminator_network(x, keep_prob):
 	features = dataset.COLORS
-	h,w = H,W
+	h,w = dataset.H,dataset.W
 
 	with tf.variable_scope('conv1') as scope:
 		conv1_relu = conv_layer(x, [3,3,features,32], [32])
@@ -172,14 +112,40 @@ def do_all():
 	flat = tf.reshape(conv4_1_relu, [-1, h*w*features])
 
 	with tf.name_scope('dropout'):
-		keep_prob = tf.placeholder(tf.float32)
 		tf.summary.scalar('dropout_keep_probability', keep_prob)
 		dropped = tf.nn.dropout(flat, keep_prob)
 
 	with tf.variable_scope("dense1"):
 		dense1 = dense_layer(dropped, h*w*features, 256, 'dense1')
-	with tf.variable_scope("dense2"):
-		y = dense_layer(dense1, 256, 10, 'dense2', act_fun=tf.identity)
+
+	# without another dense 10-way layer, called is supposed to add one or more of these
+	return dense1, 256
+
+def do_all():
+	config = tf.ConfigProto()
+	config.gpu_options.allow_growth = True
+	#config=tf.ConfigProto(log_device_placement=True))
+	sess = tf.InteractiveSession(config=config)
+
+	with tf.name_scope('input'):
+		x = tf.placeholder(tf.float32, [None,dataset.H,dataset.W,1], name='x-input')
+		y_true = tf.placeholder(tf.float32, [None,LABELS], name='y-input')
+		keep_prob = tf.placeholder(tf.float32)
+		tf.summary.image('input', x, 4)
+
+	def feed_dict(train):
+		if train:
+			xs, ys = dataset.next_batch()
+			k = 0.7
+		else:
+			xs, ys = dataset.X_test, dataset.y_test
+			k = 1.0
+		return { x: xs, y_true: ys, keep_prob: k }
+
+	disc_wide_code, disc_width = discriminator_network(x, keep_prob)
+
+	with tf.variable_scope("dense_to_classes"):
+		y = dense_layer(disc_wide_code, disc_width, 10, 'dense2', act_fun=tf.identity)
 
 	with tf.name_scope('cross_entropy'):
 		diff = tf.nn.softmax_cross_entropy_with_logits(y, y_true)
