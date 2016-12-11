@@ -75,10 +75,6 @@ def variable_summaries(var):
 		tf.summary.scalar('min', tf.reduce_min(var))
 		tf.summary.histogram('histogram', var)
 
-#def weight_variable(shape):
-#	initial = tf. truncated_normal(shape, stddev=0.1)
-#	return tf.Variable(initial)
-
 def bias_variable(shape):
 	initial = tf.constant(0.0, shape=shape)
 	return tf.Variable(initial)
@@ -103,10 +99,9 @@ def conv_layer(input, kernel_shape, bias_shape, stride=1, act_fun=tf.nn.relu):
 	biases  = tf.get_variable("biases", bias_shape, initializer=tf.constant_initializer(0.0))
 	conv    = tf.nn.convolution(input, weights, strides=[stride,stride], padding='SAME')
 	pre_act = conv + biases
-	act = act_fun(pre_act)
 	#pic_shape = act.get_shape()
+	n_in  = kernel_shape[-2]
 	n_out = kernel_shape[-1]
-
 
 	#bn_mean     = tf.get_variable("bn_mean", batch_mean, initializer=tf.constant_initializer(0.0))
 	#bn_variance = tf.get_variable("bn_variance", batch_var, initializer=tf.constant_initializer(0.5))
@@ -114,12 +109,12 @@ def conv_layer(input, kernel_shape, bias_shape, stride=1, act_fun=tf.nn.relu):
         #gamma = tf.Variable(tf.constant(1.0, shape=[n_out]), name='gamma', trainable=False)
 	#ema = tf.train.ExponentialMovingAverage(decay=0.5)
 
-	batch_mean, batch_var = tf.nn.moments(act, [0,1,2], name='moments', keep_dims=True)
+	batch_mean, batch_var = tf.nn.moments(pre_act, [0,1,2], name='moments', keep_dims=True)
 	#for so-called "global normalization", used with convolutional filters with shape [batch, height, width, depth], pass axes=[0, 1, 2].
 	#for simple batch normalization pass axes=[0] (batch only).
 
-	bn = tf.nn.batch_normalization(act, batch_mean, batch_var, offset=None, scale=None, variance_epsilon=0.01, name="bn")
-	return bn
+	bn = tf.nn.batch_normalization(pre_act, batch_mean, batch_var, offset=None, scale=None, variance_epsilon=0.01, name="bn")
+	return act_fun(bn)
 
 def do_all():
 	config = tf.ConfigProto()
@@ -130,12 +125,12 @@ def do_all():
 	with tf.name_scope('input'):
 		x = tf.placeholder(tf.float32, [None,H,W,1], name='x-input')
 		y_true = tf.placeholder(tf.float32, [None,LABELS], name='y-input')
-		#tf.summary.image('input', x, 4)
+		tf.summary.image('input', x, 4)
 
 	def feed_dict(train):
 		if train:
 			xs, ys = dataset.next_batch()
-			k = 0.9
+			k = 0.7
 		else:
 			xs, ys = dataset.X_test, dataset.y_test
 			k = 1.0
