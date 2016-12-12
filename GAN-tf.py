@@ -14,14 +14,6 @@ LOG_DIR = "ramdisk/log"
 LATENT = 150
 LABELS = 10
 
-# rescale to -0.95 .. +0.95
-dataset.X_train *= 2.0
-dataset.X_train -= 1.0
-dataset.X_train *= 0.95
-dataset.X_test *= 2.0
-dataset.X_test -= 1.0
-dataset.X_test *= 0.95
-
 def glorot_normal(shape):
 	s = np.sqrt(2. / (shape[-1] + shape[-2]))
 	return tf.random_normal_initializer(stddev=s)
@@ -111,15 +103,65 @@ def discriminator_network(x, keep_prob):
 
 	flat = tf.reshape(conv4_1_relu, [-1, h*w*features])
 
-	with tf.name_scope('dropout'):
-		tf.summary.scalar('dropout_keep_probability', keep_prob)
-		dropped = tf.nn.dropout(flat, keep_prob)
+	#with tf.name_scope('dropout'):
+	#	tf.summary.scalar('dropout_keep_probability', keep_prob)
+	#	dropped = tf.nn.dropout(flat, keep_prob)
 
 	with tf.variable_scope("dense1"):
-		dense1 = dense_layer(dropped, h*w*features, 256, 'dense1')
+		dense1 = dense_layer(flat, h*w*features, 256, 'dense1')
 
 	# without another dense 10-way layer, called is supposed to add one or more of these
 	return dense1, 256
+
+def leaky_relu(x):
+	return tf.maximum(0.1*x, x)
+
+def deconvolution_layer(x, kernel_shape, bias_shape, stride, output_shape, act_fun=tf.nn.relu):
+	weights = tf.get_variable("weights", kernel_shape, initializer=glorot_normal(kernel_shape))
+	biases  = tf.get_variable("biases", bias_shape, initializer=tf.constant_initializer(0.0))
+	conv    = tf.nn.conv2d_transpose(x, weights, output_shape, strides=[1,stride,stride,1], name='conv2d_transpose')
+
+#tf.nn.conv2d_transpose(value, filter, output_shape, strides, padding='SAME', data_format='NHWC', name=None)
+
+        #deconv = tf.reshape(tf.nn.bias_add(deconv, biases), deconv.get_shape())
+	pre_act = conv + biases
+	batch_mean, batch_var = tf.nn.moments(pre_act, [0,1,2], name='moments', keep_dims=True)
+	bn = tf.nn.batch_normalization(pre_act, batch_mean, batch_var, offset=None, scale=None, variance_epsilon=0.01, name="bn")
+	return act_fun(bn)
+
+def generator_network(l):
+	with tf.variable_scope("proj"):
+		proj = dense_layer(l, LATENT, 1024*4*4, 'latent_project')
+	with tf.variable_scope("unflat"):
+		not_flat = tf.reshape(proj, [-1, 4, 4, 1024])
+	features = 1024
+	h,w = 4,4
+
+	want_features = 512
+	with tf.variable_scope("deconv1"):
+		batch_size = tf.shape(l)[0]
+		dconv1 = deconvolution_layer(not_flat, [3,3,want_features,features], [want_features], 2, [batch_size,2*h,2*w,want_features])
+	w,h = 8,8
+	features = want_features
+
+	want_features = 256
+	with tf.variable_scope("deconv2"):
+		batch_size = tf.shape(l)[0]
+		dconv2 = deconvolution_layer(dconv1, [3,3,want_features,features], [want_features], 2, [batch_size,2*h,2*w,want_features])
+	w,h = 16,16
+	features = want_features
+
+	want_features = 128
+	with tf.variable_scope("deconv3"):
+		batch_size = tf.shape(l)[0]
+		dconv3 = deconvolution_layer(dconv2, [3,3,want_features,features], [want_features], 2, [batch_size,2*h,2*w,want_features])
+	features = want_features
+
+	want_features = dataset.COLORS
+	with tf.variable_scope('deconv4') as scope:
+		dconv4 = conv_layer(dconv3, [3,3,features,want_features], [want_features])
+
+	return dconv4
 
 def do_all():
 	config = tf.ConfigProto()
@@ -131,6 +173,7 @@ def do_all():
 		x = tf.placeholder(tf.float32, [None,dataset.H,dataset.W,1], name='x-input')
 		y_true = tf.placeholder(tf.float32, [None,LABELS], name='y-input')
 		keep_prob = tf.placeholder(tf.float32)
+		latent = tf.placeholder(tf.float32, [None,LATENT], name='latent')
 		tf.summary.image('input', x, 4)
 
 	disc_wide_code, disc_width = discriminator_network(x, keep_prob)
@@ -157,43 +200,50 @@ def do_all():
 	merged = tf.summary.merge_all()
 	train_writer = tf.summary.FileWriter(LOG_TRAIN_DIR, sess.graph)
 	test_writer = tf.summary.FileWriter(LOG_TEST_DIR)
+	generated = generator_network(latent)
+
 	tf.global_variables_initializer().run()
 
-
-	def feed_dict(train):
-		if train:
-			xs, ys = dataset.next_batch()
-			k = 0.7
-		else:
-			xs, ys = dataset.X_test, dataset.y_test
-			k = 1.0
-		return { x: xs, y_true: ys, keep_prob: k }
+	#tf.summary.image('generated', generated, 4)
 
 	ts1 = 0
 	for i in range(MAX_STEPS):
 		if i % 100 == 0:
-			summary, acc = sess.run([merged, accuracy], feed_dict=feed_dict(False))
+			summary, acc = sess.run([merged, accuracy], feed_dict={ x: dataset.X_test, y_true: dataset.y_test, keep_prob: 1.0 })
 			test_writer.add_summary(summary, i)
 			ts2 = time.time()
 			if ts1:
 				print('e%02i:%05i %0.2fms acc=%0.2f' % (dataset.epoch, i, 1000*(ts2-ts1), acc*100))
 			run_options = tf.RunOptions(trace_level=tf.RunOptions.FULL_TRACE)
 			run_metadata = tf.RunMetadata()
-			summary, loss = sess.run(
-				[merged, train_step], feed_dict=feed_dict(True),
-				options=run_options,
-				run_metadata=run_metadata)
-			train_writer.add_run_metadata(run_metadata, 'step%03d' % i)
-			train_writer.add_summary(summary, i)
-			ts1 = ts2
 		else:
-			summary, _ = sess.run([merged, train_step], feed_dict=feed_dict(True))
-			train_writer.add_summary(summary, i)
+			run_options = None
+			run_metadata = None
+		xs, ys = dataset.next_batch()
+		summary, _ = sess.run(
+			[merged, train_step], feed_dict={ x: xs, y_true: ys, keep_prob: 0.7 },
+			options=run_options,
+			run_metadata=run_metadata)
+		if run_metadata: train_writer.add_run_metadata(run_metadata, 'step%03d' % i)
+		train_writer.add_summary(summary, i)
+		ts1 = ts2
+		#summary, _ = sess.run([merged, train_step], feed_dict=feed_classifier(True))
+		#train_writer.add_summary(summary, i)
+
+		l = np.random.normal(0, 1, size=(dataset.BATCH,LATENT) )
+		summary2 = tf.summary.image("generated", generated, 1)
+		s2,gen_images = sess.run( [summary2,generated], feed_dict={ latent: l } )
+		#summary2 = tf.Summary()
+		#print(type(tf.summary))
+		#print(dir(summary))
+		#print(dir(summary2))
+		#summary2.image("generated", gen_images, 1)
+		train_writer.add_summary(s2)
 
 	train_writer.close()
 	test_writer.close()
 
-def main(aaa):
+def main(args):
 	#with tf.device('/cpu:0'):
 	do_all()
 

@@ -1,6 +1,14 @@
 import tensorflow as tf
 import numpy as np
 
+def rescale_minus_095_plus_095(dataset):
+	dataset.X_train *= 2.0
+	dataset.X_train -= 1.0
+	dataset.X_train *= 0.95
+	dataset.X_test *= 2.0
+	dataset.X_test -= 1.0
+	dataset.X_test *= 0.95
+
 class Dataset:
 	def __init__(self):
 		self.cursor = 1e10
@@ -32,6 +40,7 @@ def mnist(dataset):
 	dataset.X_test  = np.zeros( (len(mnist.test.images),dataset.H,dataset.W,1) )
 	dataset.X_test[:,2:30,2:30,:] = mnist.test.images.reshape( (-1,28,28,1) )
 	dataset.y_test  = mnist.test.labels
+	rescale_minus_095_plus_095(dataset)
 
 def cirar10(dataset):
 	labels_text = "airplane automobile bird cat deer dog frog horse ship truck FAKE".split()
