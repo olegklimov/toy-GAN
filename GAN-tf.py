@@ -18,18 +18,23 @@ def glorot_normal(shape):
 	s = np.sqrt(2. / (shape[-1] + shape[-2]))
 	return tf.random_normal_initializer(stddev=s)
 
+def leaky_relu(x):
+	return tf.maximum(0.1*x, x)
+
 def variable_summaries(var):
 	with tf.name_scope('summaries'):
 		mean = tf.reduce_mean(var)
-		tf.summary.scalar('mean', mean)
-	with tf.name_scope('stddev'):
 		stddev = tf.sqrt(tf.reduce_mean(tf.square(var - mean)))
+		tf.summary.scalar('mean', mean)
 		tf.summary.scalar('stddev', stddev)
-		tf.summary.scalar('max', tf.reduce_max(var))
-		tf.summary.scalar('min', tf.reduce_min(var))
-		tf.summary.histogram('histogram', var)
+	#with tf.name_scope('stddev'):
+	#	stddev = tf.sqrt(tf.reduce_mean(tf.square(var - mean)))
+	#	tf.summary.scalar('stddev', stddev)
+	#	tf.summary.scalar('max', tf.reduce_max(var))
+	#	tf.summary.scalar('min', tf.reduce_min(var))
+	#	tf.summary.histogram('histogram', var)
 
-def dense_layer(input_tensor, input_dim, output_dim, layer_name, act_fun=tf.nn.relu):
+def dense_layer(learnable, input_tensor, input_dim, output_dim, layer_name, act_fun=tf.nn.relu):
 	with tf.name_scope(layer_name):
 		with tf.name_scope('weights'):
 			weights = tf.get_variable("weights", [input_dim, output_dim], initializer=glorot_normal([input_dim, output_dim]))
@@ -42,9 +47,11 @@ def dense_layer(input_tensor, input_dim, output_dim, layer_name, act_fun=tf.nn.r
 			#tf.summary.histogram('pre_activations', preactivate)
 			activations = act_fun(preactivate, name='activation')
 			#tf.summary.histogram('activations', activations)
+	learnable.append(weights)
+	learnable.append(biases)
 	return activations
 
-def conv_layer(input, kernel_shape, bias_shape, stride=1, act_fun=tf.nn.relu):
+def conv_layer(learnable, input, kernel_shape, bias_shape, stride=1, act_fun=tf.nn.relu):
 	weights = tf.get_variable("weights", kernel_shape, initializer=glorot_normal(kernel_shape))
 	biases  = tf.get_variable("biases", bias_shape, initializer=tf.constant_initializer(0.0))
 	conv    = tf.nn.convolution(input, weights, strides=[stride,stride], padding='SAME')
@@ -65,37 +72,39 @@ def conv_layer(input, kernel_shape, bias_shape, stride=1, act_fun=tf.nn.relu):
 	#for simple batch normalization pass axes=[0] (batch only).
 
 	bn = tf.nn.batch_normalization(pre_act, batch_mean, batch_var, offset=None, scale=None, variance_epsilon=0.01, name="bn")
+	learnable.append(weights)
+	learnable.append(biases)
 	return act_fun(bn)
 
-def discriminator_network(x, keep_prob):
+def discriminator_network(learnable, x, keep_prob):
 	features = dataset.COLORS
 	h,w = dataset.H,dataset.W
 
 	with tf.variable_scope('conv1') as scope:
-		conv1_relu = conv_layer(x, [3,3,features,32], [32])
+		conv1_relu = conv_layer(learnable, x, [3,3,features,32], [32])
 		features = 32
 
 	with tf.variable_scope('conv2_1') as scope:
 		stride = 2
-		conv2_1_relu = conv_layer(conv1_relu, [3,3,features,64], [64], stride=stride)
+		conv2_1_relu = conv_layer(learnable, conv1_relu, [3,3,features,64], [64], stride=stride)
 		h //= stride
 		w //= stride
 		features = 64
 	with tf.variable_scope('conv2_2') as scope:
-		conv2_2_relu = conv_layer(conv2_1_relu, [3,3,features,64], [64])
+		conv2_2_relu = conv_layer(learnable, conv2_1_relu, [3,3,features,64], [64])
 
 	with tf.variable_scope('conv3_1') as scope:
 		stride = 2
-		conv3_1_relu = conv_layer(conv2_2_relu, [3,3,features,128], [128], stride=stride)
+		conv3_1_relu = conv_layer(learnable, conv2_2_relu, [3,3,features,128], [128], stride=stride)
 		h //= stride
 		w //= stride
 		features = 128
 	with tf.variable_scope('conv3_2') as scope:
-		conv3_2_relu = conv_layer(conv3_1_relu, [3,3,features,128], [128])
+		conv3_2_relu = conv_layer(learnable, conv3_1_relu, [3,3,features,128], [128])
 
 	with tf.variable_scope('conv4_1') as scope:
 		stride = 2
-		conv4_1_relu = conv_layer(conv3_2_relu, [3,3,features,256], [256], stride=stride)
+		conv4_1_relu = conv_layer(learnable, conv3_2_relu, [3,3,features,256], [256], stride=stride)
 		h //= stride
 		w //= stride
 		features = 256
@@ -108,30 +117,27 @@ def discriminator_network(x, keep_prob):
 	#	dropped = tf.nn.dropout(flat, keep_prob)
 
 	with tf.variable_scope("dense1"):
-		dense1 = dense_layer(flat, h*w*features, 256, 'dense1')
+		dense1 = dense_layer(learnable, flat, h*w*features, 256, 'dense1')
 
 	# without another dense 10-way layer, called is supposed to add one or more of these
 	return dense1, 256
 
-def leaky_relu(x):
-	return tf.maximum(0.1*x, x)
-
-def deconvolution_layer(x, kernel_shape, bias_shape, stride, output_shape, act_fun=tf.nn.relu):
+def deconvolution_layer(learnable, x, kernel_shape, bias_shape, stride, output_shape, act_fun=tf.nn.relu):
 	weights = tf.get_variable("weights", kernel_shape, initializer=glorot_normal(kernel_shape))
 	biases  = tf.get_variable("biases", bias_shape, initializer=tf.constant_initializer(0.0))
 	conv    = tf.nn.conv2d_transpose(x, weights, output_shape, strides=[1,stride,stride,1], name='conv2d_transpose')
-
-#tf.nn.conv2d_transpose(value, filter, output_shape, strides, padding='SAME', data_format='NHWC', name=None)
-
-        #deconv = tf.reshape(tf.nn.bias_add(deconv, biases), deconv.get_shape())
+	#deconv = tf.reshape(tf.nn.bias_add(deconv, biases), deconv.get_shape())
 	pre_act = conv + biases
 	batch_mean, batch_var = tf.nn.moments(pre_act, [0,1,2], name='moments', keep_dims=True)
 	bn = tf.nn.batch_normalization(pre_act, batch_mean, batch_var, offset=None, scale=None, variance_epsilon=0.01, name="bn")
+
+	learnable.append(weights)
+	learnable.append(biases)
 	return act_fun(bn)
 
-def generator_network(l):
+def generator_network(learnable, l):
 	with tf.variable_scope("proj"):
-		proj = dense_layer(l, LATENT, 1024*4*4, 'latent_project')
+		proj = dense_layer(learnable, l, LATENT, 1024*4*4, 'latent_project')
 	with tf.variable_scope("unflat"):
 		not_flat = tf.reshape(proj, [-1, 4, 4, 1024])
 	features = 1024
@@ -140,26 +146,26 @@ def generator_network(l):
 	want_features = 512
 	with tf.variable_scope("deconv1"):
 		batch_size = tf.shape(l)[0]
-		dconv1 = deconvolution_layer(not_flat, [3,3,want_features,features], [want_features], 2, [batch_size,2*h,2*w,want_features])
+		dconv1 = deconvolution_layer(learnable, not_flat, [3,3,want_features,features], [want_features], 2, [batch_size,2*h,2*w,want_features])
 	w,h = 8,8
 	features = want_features
 
 	want_features = 256
 	with tf.variable_scope("deconv2"):
 		batch_size = tf.shape(l)[0]
-		dconv2 = deconvolution_layer(dconv1, [3,3,want_features,features], [want_features], 2, [batch_size,2*h,2*w,want_features])
+		dconv2 = deconvolution_layer(learnable, dconv1, [3,3,want_features,features], [want_features], 2, [batch_size,2*h,2*w,want_features])
 	w,h = 16,16
 	features = want_features
 
 	want_features = 128
 	with tf.variable_scope("deconv3"):
 		batch_size = tf.shape(l)[0]
-		dconv3 = deconvolution_layer(dconv2, [3,3,want_features,features], [want_features], 2, [batch_size,2*h,2*w,want_features])
+		dconv3 = deconvolution_layer(learnable, dconv2, [3,3,want_features,features], [want_features], 2, [batch_size,2*h,2*w,want_features])
 	features = want_features
 
 	want_features = dataset.COLORS
 	with tf.variable_scope('deconv4') as scope:
-		dconv4 = conv_layer(dconv3, [3,3,features,want_features], [want_features])
+		dconv4 = conv_layer(learnable, dconv3, [3,3,features,want_features], [want_features])
 
 	return dconv4
 
@@ -176,19 +182,19 @@ def do_all():
 		latent = tf.placeholder(tf.float32, [None,LATENT], name='latent')
 		tf.summary.image('input', x, 4)
 
-	disc_wide_code, disc_width = discriminator_network(x, keep_prob)
+	learnable = []
+	disc_wide_code, disc_width = discriminator_network(learnable, x, keep_prob)
 
 	with tf.variable_scope("dense_to_classes"):
-		y = dense_layer(disc_wide_code, disc_width, 10, 'dense2', act_fun=tf.identity)
-
+		y = dense_layer(learnable, disc_wide_code, disc_width, 10, 'dense2', act_fun=tf.identity)
 	with tf.name_scope('cross_entropy'):
-		diff = tf.nn.softmax_cross_entropy_with_logits(y, y_true)
-		with tf.name_scope('total'):
-			cross_entropy = tf.reduce_mean(diff)
-			tf.summary.scalar('cross_entropy', cross_entropy)
-
+		losses_over_batch = tf.nn.softmax_cross_entropy_with_logits(y, y_true)
+		#with tf.name_scope('total'):
+		cross_entropy_loss = tf.reduce_mean(losses_over_batch)
+		tf.summary.scalar('cross_entropy_loss', cross_entropy_loss)
 	with tf.name_scope('train'):
-		train_step = tf.train.AdamOptimizer(0.001).minimize(cross_entropy)
+		train_adam = tf.train.AdamOptimizer(0.001).minimize(cross_entropy_loss, var_list=learnable)
+	#train_op = opt.minimize(loss, var_list=[variables to optimize over])
 
 	with tf.name_scope('accuracy'):
 		with tf.name_scope('correct_prediction'):
@@ -200,7 +206,9 @@ def do_all():
 	merged = tf.summary.merge_all()
 	train_writer = tf.summary.FileWriter(LOG_TRAIN_DIR, sess.graph)
 	test_writer = tf.summary.FileWriter(LOG_TEST_DIR)
-	generated = generator_network(latent)
+	
+	generator_learnable = []
+	generated = generator_network(generator_learnable, latent)
 
 	tf.global_variables_initializer().run()
 
@@ -220,25 +228,25 @@ def do_all():
 			run_options = None
 			run_metadata = None
 		xs, ys = dataset.next_batch()
-		summary, _ = sess.run(
-			[merged, train_step], feed_dict={ x: xs, y_true: ys, keep_prob: 0.7 },
+		l = np.random.normal(0, 1, size=(dataset.BATCH,LATENT) )
+		summary, _, generated_calc = sess.run(
+			[merged, train_adam, generated], feed_dict={ x: xs, y_true: ys, keep_prob: 0.7, latent: l },
 			options=run_options,
 			run_metadata=run_metadata)
-		if run_metadata: train_writer.add_run_metadata(run_metadata, 'step%03d' % i)
-		train_writer.add_summary(summary, i)
-		ts1 = ts2
-		#summary, _ = sess.run([merged, train_step], feed_dict=feed_classifier(True))
-		#train_writer.add_summary(summary, i)
 
-		l = np.random.normal(0, 1, size=(dataset.BATCH,LATENT) )
-		summary2 = tf.summary.image("generated", generated, 1)
-		s2,gen_images = sess.run( [summary2,generated], feed_dict={ latent: l } )
+		#summary2 = tf.summary.image("generated", generated, 1)
+		#gen_images = sess.run( [], feed_dict={ latent: l } )
+
+		if run_metadata:
+			train_writer.add_run_metadata(run_metadata, 'step%03d' % i)
+			#train_writer.add_summary(s2)
+			train_writer.add_summary(summary, i)
+		ts1 = ts2
+
+		#summary, _ = sess.run([merged, train_adam], feed_dict=feed_classifier(True))
+		#train_writer.add_summary(summary, i)
 		#summary2 = tf.Summary()
-		#print(type(tf.summary))
-		#print(dir(summary))
-		#print(dir(summary2))
 		#summary2.image("generated", gen_images, 1)
-		train_writer.add_summary(s2)
 
 	train_writer.close()
 	test_writer.close()
