@@ -35,25 +35,29 @@ def variable_summaries(var):
 	#	tf.summary.histogram('histogram', var)
 
 def dense_layer(learnable, input_tensor, input_dim, output_dim, layer_name, act_fun=tf.nn.relu):
-	with tf.name_scope(layer_name):
-		with tf.name_scope('weights'):
-			weights = tf.get_variable("weights", [input_dim, output_dim], initializer=glorot_normal([input_dim, output_dim]))
-			variable_summaries(weights)
-		with tf.name_scope('biases'):
-			biases = tf.get_variable("bias_variable", [output_dim], initializer=tf.constant_initializer(0.0))
-			variable_summaries(biases)
-		with tf.name_scope('Wx_plus_b'):
-			preactivate = tf.matmul(input_tensor, weights) + biases
-			#tf.summary.histogram('pre_activations', preactivate)
-			activations = act_fun(preactivate, name='activation')
-			#tf.summary.histogram('activations', activations)
+	#with tf.name_scope(layer_name):
+	with tf.name_scope('weights'):
+		weights = tf.get_variable("weights", [input_dim, output_dim], initializer=glorot_normal([input_dim, output_dim]))
+		variable_summaries(weights)
+	with tf.name_scope('biases'):
+		biases = tf.get_variable("bias_variable", [output_dim], initializer=tf.constant_initializer(0.0))
+		variable_summaries(biases)
+	#with tf.name_scope('Wx_plus_b'):
+	preactivate = tf.matmul(input_tensor, weights) + biases
+	#tf.summary.histogram('pre_activations', preactivate)
+	activations = act_fun(preactivate, name='activation')
+	tf.summary.histogram('activations', activations)
 	learnable.append(weights)
 	learnable.append(biases)
 	return activations
 
 def conv_layer(learnable, input, kernel_shape, bias_shape, stride=1, act_fun=tf.nn.relu):
-	weights = tf.get_variable("weights", kernel_shape, initializer=glorot_normal(kernel_shape))
-	biases  = tf.get_variable("biases", bias_shape, initializer=tf.constant_initializer(0.0))
+	with tf.name_scope('weights'):
+		weights = tf.get_variable("weights", kernel_shape, initializer=glorot_normal(kernel_shape))
+		variable_summaries(weights)
+	with tf.name_scope('biases'):
+		biases  = tf.get_variable("biases", bias_shape, initializer=tf.constant_initializer(0.0))
+		variable_summaries(biases)
 	conv    = tf.nn.convolution(input, weights, strides=[stride,stride], padding='SAME')
 	pre_act = conv + biases
 	#pic_shape = act.get_shape()
@@ -75,6 +79,26 @@ def conv_layer(learnable, input, kernel_shape, bias_shape, stride=1, act_fun=tf.
 	learnable.append(weights)
 	learnable.append(biases)
 	return act_fun(bn)
+
+def deconvolution_layer(learnable, x, kernel_shape, bias_shape, stride, output_shape, act_fun=tf.nn.relu):
+	with tf.name_scope('weights'):
+		weights = tf.get_variable("weights", kernel_shape, initializer=glorot_normal(kernel_shape))
+		variable_summaries(weights)
+	with tf.name_scope('biases'):
+		biases  = tf.get_variable("biases", bias_shape, initializer=tf.constant_initializer(0.0))
+		variable_summaries(biases)
+
+	conv    = tf.nn.conv2d_transpose(x, weights, output_shape, strides=[1,stride,stride,1], name='conv2d_transpose')
+	#deconv = tf.reshape(tf.nn.bias_add(deconv, biases), deconv.get_shape())
+	pre_act = conv + biases
+	batch_mean, batch_var = tf.nn.moments(pre_act, [0,1,2], name='moments', keep_dims=True)
+	bn = tf.nn.batch_normalization(pre_act, batch_mean, batch_var, offset=None, scale=None, variance_epsilon=0.01, name="bn")
+
+	learnable.append(weights)
+	learnable.append(biases)
+	return act_fun(bn)
+
+########################
 
 def discriminator_network(learnable, x, keep_prob):
 	features = dataset.COLORS
@@ -121,19 +145,6 @@ def discriminator_network(learnable, x, keep_prob):
 
 	# without another dense 10-way layer, called is supposed to add one or more of these
 	return dense1, 256
-
-def deconvolution_layer(learnable, x, kernel_shape, bias_shape, stride, output_shape, act_fun=tf.nn.relu):
-	weights = tf.get_variable("weights", kernel_shape, initializer=glorot_normal(kernel_shape))
-	biases  = tf.get_variable("biases", bias_shape, initializer=tf.constant_initializer(0.0))
-	conv    = tf.nn.conv2d_transpose(x, weights, output_shape, strides=[1,stride,stride,1], name='conv2d_transpose')
-	#deconv = tf.reshape(tf.nn.bias_add(deconv, biases), deconv.get_shape())
-	pre_act = conv + biases
-	batch_mean, batch_var = tf.nn.moments(pre_act, [0,1,2], name='moments', keep_dims=True)
-	bn = tf.nn.batch_normalization(pre_act, batch_mean, batch_var, offset=None, scale=None, variance_epsilon=0.01, name="bn")
-
-	learnable.append(weights)
-	learnable.append(biases)
-	return act_fun(bn)
 
 def generator_network(learnable, l):
 	with tf.variable_scope("proj"):
