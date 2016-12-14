@@ -187,43 +187,46 @@ def do_all():
 	#config=tf.ConfigProto(log_device_placement=True))
 	sess = tf.InteractiveSession(config=config)
 
-	with tf.name_scope('input'):
-		real = tf.placeholder(tf.float32, [None,dataset.H,dataset.W,1], name='real-input')
+	real = tf.placeholder(tf.float32, [None,dataset.H,dataset.W,1], name='real-input')
 
-		classification_true = tf.placeholder(tf.float32, [None,dataset.LABELS], name='classification_true')
-		real_or_fake_true = tf.placeholder(tf.float32, [None,2], name='real_or_fake_true')
+	classification_true = tf.placeholder(tf.float32, [None,dataset.LABELS], name='classification_true')
+	real_or_fake_true = tf.placeholder(tf.float32, [None,2], name='real_or_fake_true')
 
-		latent_placeholder = tf.placeholder(tf.float32, [None,LATENT], name='latent')
+	latent_placeholder = tf.placeholder(tf.float32, [None,LATENT], name='latent')
 
 	generator_learnable = []
-	fake = generator_network(generator_learnable, latent_placeholder)
+	with tf.name_scope("generator-network"):
+		fake = generator_network(generator_learnable, latent_placeholder)
 
 	real_concat_fake = tf.concat(0, [real,fake])
 
 	discriminator_learnable = []
-	disc_wide_code, disc_width = discriminator_network(discriminator_learnable, real_concat_fake)
+	with tf.name_scope("discriminator-network"):
+		disc_wide_code, disc_width = discriminator_network(discriminator_learnable, real_concat_fake)
 
 	# classes
-	with tf.variable_scope("dense_classification"):
-		classification = dense_layer(discriminator_learnable, disc_wide_code, disc_width, dataset.LABELS, act_fun=tf.identity)
-	classification_logits  = tf.nn.softmax(classification)
-	classification_loss     = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(classification, classification_true))
-	classification_correct  = tf.equal(tf.argmax(classification, 1), tf.argmax(classification_true, 1))
-	classification_accuracy = tf.reduce_mean(tf.cast(classification_correct, tf.float32))
-	tf.summary.scalar('classification_loss', classification_loss)
-	tf.summary.scalar('classification_accuracy', classification_accuracy)
-	tf.summary.histogram('classification_logits', classification_logits)
+	with tf.name_scope("classification"):
+		with tf.variable_scope("dense_classification"):
+			classification = dense_layer(discriminator_learnable, disc_wide_code, disc_width, dataset.LABELS, act_fun=tf.identity)
+		classification_logits  = tf.nn.softmax(classification)
+		classification_loss     = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(classification, classification_true))
+		classification_correct  = tf.equal(tf.argmax(classification, 1), tf.argmax(classification_true, 1))
+		classification_accuracy = tf.reduce_mean(tf.cast(classification_correct, tf.float32))
+		tf.summary.scalar('classification_loss', classification_loss)
+		tf.summary.scalar('classification_accuracy', classification_accuracy)
+		tf.summary.histogram('classification_logits', classification_logits)
 
 	# real or fake
-	with tf.variable_scope("dense_real_or_fake"):
-		real_or_fake = dense_layer(discriminator_learnable, disc_wide_code, disc_width, 2, act_fun=tf.identity)
-	real_or_fake_logits  = tf.nn.softmax(real_or_fake)
-	real_or_fake_loss     = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(real_or_fake, real_or_fake_true))
-	real_or_fake_correct  = tf.equal(tf.argmax(real_or_fake, 1), tf.argmax(real_or_fake_true, 1))
-	real_or_fake_accuracy = tf.reduce_mean(tf.cast(real_or_fake_correct, tf.float32))
-	tf.summary.scalar('real_or_fake_loss', real_or_fake_loss)
-	tf.summary.scalar('real_or_fake_accuracy', real_or_fake_accuracy)
-	tf.summary.histogram('real_or_fake_logits', real_or_fake_logits)
+	with tf.name_scope("real_or_fake"):
+		with tf.variable_scope("dense_real_or_fake"):
+			real_or_fake = dense_layer(discriminator_learnable, disc_wide_code, disc_width, 2, act_fun=tf.identity)
+		real_or_fake_logits  = tf.nn.softmax(real_or_fake)
+		real_or_fake_loss     = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(real_or_fake, real_or_fake_true))
+		real_or_fake_correct  = tf.equal(tf.argmax(real_or_fake, 1), tf.argmax(real_or_fake_true, 1))
+		real_or_fake_accuracy = tf.reduce_mean(tf.cast(real_or_fake_correct, tf.float32))
+		tf.summary.scalar('real_or_fake_loss', real_or_fake_loss)
+		tf.summary.scalar('real_or_fake_accuracy', real_or_fake_accuracy)
+		tf.summary.histogram('real_or_fake_logits', real_or_fake_logits)
 
 	# adams
 	with tf.name_scope('adam_discriminator'):
@@ -262,10 +265,10 @@ def do_all():
 		d_class          = np.zeros( (2*dataset.BATCH,dataset.LABELS), dtype=np.float32 )
 		d_class[:dataset.BATCH] = d_labels*0.9 + 0.1/dataset.LABELS
 		real_or_fake     = np.zeros( (2*dataset.BATCH,2), dtype=np.float32 )
-		real_or_fake[:dataset.BATCH,0] = 0.9
-		real_or_fake[:dataset.BATCH,1] = 0.1
-		real_or_fake[dataset.BATCH:,0] = 0.1
-		real_or_fake[dataset.BATCH:,1] = 0.9
+		real_or_fake[:dataset.BATCH,0] = 0.7
+		real_or_fake[:dataset.BATCH,1] = 0.3
+		real_or_fake[dataset.BATCH:,0] = 0.3
+		real_or_fake[dataset.BATCH:,1] = 0.7
 
 		for b in range(dataset.BATCH):
 			i = d_latent[b,:dataset.LABELS].argmax()
