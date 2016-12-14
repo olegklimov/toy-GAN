@@ -12,7 +12,6 @@ print("HxW=%ix%i" % (dataset.W,dataset.H))
 MAX_STEPS = 5000
 LOG_DIR = "ramdisk/log"
 LATENT = 150
-LABELS = 10
 
 def glorot_normal(shape):
 	s = np.sqrt(2. / (shape[-1] + shape[-2]))
@@ -22,11 +21,10 @@ def leaky_relu(x):
 	return tf.maximum(0.1*x, x)
 
 def variable_summaries(var):
-	with tf.name_scope('summaries'):
-		mean = tf.reduce_mean(var)
-		stddev = tf.sqrt(tf.reduce_mean(tf.square(var - mean)))
-		tf.summary.scalar('mean', mean)
-		tf.summary.scalar('stddev', stddev)
+	mean = tf.reduce_mean(var)
+	stddev = tf.sqrt(tf.reduce_mean(tf.square(var - mean)))
+	tf.summary.scalar('mean', mean)
+	tf.summary.scalar('stddev', stddev)
 	#with tf.name_scope('stddev'):
 	#	stddev = tf.sqrt(tf.reduce_mean(tf.square(var - mean)))
 	#	tf.summary.scalar('stddev', stddev)
@@ -34,8 +32,7 @@ def variable_summaries(var):
 	#	tf.summary.scalar('min', tf.reduce_min(var))
 	#	tf.summary.histogram('histogram', var)
 
-def dense_layer(learnable, input_tensor, input_dim, output_dim, layer_name, act_fun=tf.nn.relu):
-	#with tf.name_scope(layer_name):
+def dense_layer(learnable, input_tensor, input_dim, output_dim, act_fun=tf.nn.relu):
 	with tf.name_scope('weights'):
 		weights = tf.get_variable("weights", [input_dim, output_dim], initializer=glorot_normal([input_dim, output_dim]))
 		variable_summaries(weights)
@@ -100,7 +97,7 @@ def deconvolution_layer(learnable, x, kernel_shape, bias_shape, stride, output_s
 
 ########################
 
-def discriminator_network(learnable, x, keep_prob):
+def discriminator_network(learnable, x):
 	features = dataset.COLORS
 	h,w = dataset.H,dataset.W
 
@@ -132,23 +129,19 @@ def discriminator_network(learnable, x, keep_prob):
 		h //= stride
 		w //= stride
 		features = 256
-	print("final h w = %i %i" % (h,w))
+	print("discriminator final h w = %i %i" % (h,w))
 
 	flat = tf.reshape(conv4_1_relu, [-1, h*w*features])
 
-	#with tf.name_scope('dropout'):
-	#	tf.summary.scalar('dropout_keep_probability', keep_prob)
-	#	dropped = tf.nn.dropout(flat, keep_prob)
-
 	with tf.variable_scope("dense1"):
-		dense1 = dense_layer(learnable, flat, h*w*features, 256, 'dense1')
+		dense1 = dense_layer(learnable, flat, h*w*features, 256)
 
 	# without another dense 10-way layer, called is supposed to add one or more of these
 	return dense1, 256
 
 def generator_network(learnable, l):
 	with tf.variable_scope("proj"):
-		proj = dense_layer(learnable, l, LATENT, 1024*4*4, 'latent_project')
+		proj = dense_layer(learnable, l, LATENT, 1024*4*4)
 	with tf.variable_scope("unflat"):
 		not_flat = tf.reshape(proj, [-1, 4, 4, 1024])
 	features = 1024
@@ -182,82 +175,120 @@ def generator_network(learnable, l):
 
 def do_all():
 	config = tf.ConfigProto()
-	config.gpu_options.allow_growth = True
+	config.gpu_options.per_process_gpu_memory_fraction = 0.8
+	#config.gpu_options.allow_growth = True
 	#config=tf.ConfigProto(log_device_placement=True))
 	sess = tf.InteractiveSession(config=config)
 
 	with tf.name_scope('input'):
-		x = tf.placeholder(tf.float32, [None,dataset.H,dataset.W,1], name='x-input')
-		y_true = tf.placeholder(tf.float32, [None,LABELS], name='y-input')
-		keep_prob = tf.placeholder(tf.float32)
-		latent = tf.placeholder(tf.float32, [None,LATENT], name='latent')
-		tf.summary.image('input', x, 4)
+		real = tf.placeholder(tf.float32, [None,dataset.H,dataset.W,1], name='real-input')
 
-	learnable = []
-	disc_wide_code, disc_width = discriminator_network(learnable, x, keep_prob)
+		classification_true = tf.placeholder(tf.float32, [None,dataset.LABELS], name='classification_true')
+		real_or_fake_true = tf.placeholder(tf.float32, [None,2], name='real_or_fake_true')
 
-	with tf.variable_scope("dense_to_classes"):
-		y = dense_layer(learnable, disc_wide_code, disc_width, 10, 'dense2', act_fun=tf.identity)
-	with tf.name_scope('cross_entropy'):
-		losses_over_batch = tf.nn.softmax_cross_entropy_with_logits(y, y_true)
-		#with tf.name_scope('total'):
-		cross_entropy_loss = tf.reduce_mean(losses_over_batch)
-		tf.summary.scalar('cross_entropy_loss', cross_entropy_loss)
-	with tf.name_scope('train'):
-		train_adam = tf.train.AdamOptimizer(0.001).minimize(cross_entropy_loss, var_list=learnable)
-	#train_op = opt.minimize(loss, var_list=[variables to optimize over])
+		latent_placeholder = tf.placeholder(tf.float32, [None,LATENT], name='latent')
+		#tf.summary.image('input', real, 4)
 
-	with tf.name_scope('accuracy'):
-		with tf.name_scope('correct_prediction'):
-			correct_prediction = tf.equal(tf.argmax(y, 1), tf.argmax(y_true, 1))
-		with tf.name_scope('accuracy'):
-			accuracy = tf.reduce_mean(tf.cast(correct_prediction, tf.float32))
-	tf.summary.scalar('accuracy', accuracy)
+	generator_learnable = []
+	fake = generator_network(generator_learnable, latent_placeholder)
 
+	real_concat_fake = tf.concat(0, [real,fake])
+
+	discriminator_learnable = []
+	disc_wide_code, disc_width = discriminator_network(discriminator_learnable, real_concat_fake)
+
+	# classes
+	with tf.variable_scope("dense_classification"):
+		classification = dense_layer(discriminator_learnable, disc_wide_code, disc_width, dataset.LABELS, act_fun=tf.identity)
+	classification_logits  = tf.nn.softmax(classification)
+	classification_loss     = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(classification, classification_true))
+	classification_correct  = tf.equal(tf.argmax(classification, 1), tf.argmax(classification_true, 1))
+	classification_accuracy = tf.reduce_mean(tf.cast(classification_correct, tf.float32))
+	#with tf.name_scope('classification_correct'):
+	#with tf.name_scope('classification_accuracy'):
+	tf.summary.scalar('classification_loss', classification_loss)
+	tf.summary.scalar('classification_accuracy', classification_accuracy)
+
+	# real or fake
+	with tf.variable_scope("dense_real_or_fake"):
+		real_or_fake = dense_layer(discriminator_learnable, disc_wide_code, disc_width, 2, act_fun=tf.identity)
+	real_or_fake_loss     = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(real_or_fake, real_or_fake_true))
+	real_or_fake_correct  = tf.equal(tf.argmax(real_or_fake, 1), tf.argmax(real_or_fake_true, 1))
+	real_or_fake_accuracy = tf.reduce_mean(tf.cast(real_or_fake_correct, tf.float32))
+	tf.summary.scalar('real_or_fake_loss', real_or_fake_loss)
+	tf.summary.scalar('real_or_fake_accuracy', real_or_fake_accuracy)
+
+	# adams
+	with tf.name_scope('adam_discriminator'):
+		adam_discriminator = tf.train.AdamOptimizer(0.0001).minimize(
+			classification_loss + real_or_fake_loss,
+			var_list=discriminator_learnable)
+	with tf.name_scope('adam_generator'):
+		adam_generator = tf.train.AdamOptimizer(0.0001).minimize(
+			classification_loss - real_or_fake_loss,
+			var_list=generator_learnable)
+
+	# summary
 	merged = tf.summary.merge_all()
 	train_writer = tf.summary.FileWriter(LOG_TRAIN_DIR, sess.graph)
 	test_writer = tf.summary.FileWriter(LOG_TEST_DIR)
-	
-	generator_learnable = []
-	generated = generator_network(generator_learnable, latent)
 
 	tf.global_variables_initializer().run()
-
-	#tf.summary.image('generated', generated, 4)
+	#tf.summary.image('fake', fake, 4)
 
 	ts1 = 0
-	for i in range(MAX_STEPS):
-		if i % 100 == 0:
-			summary, acc = sess.run([merged, accuracy], feed_dict={ x: dataset.X_test, y_true: dataset.y_test, keep_prob: 1.0 })
-			test_writer.add_summary(summary, i)
+	for step in range(MAX_STEPS):
+		if step % 100 == 0:
+			#summary, acc = sess.run([merged, classification_accuracy], feed_dict={ real: dataset.X_test, classification_true: dataset.y_test })
+			#test_writer.add_summary(summary, step)
+			acc = 1.0
 			ts2 = time.time()
 			if ts1:
-				print('e%02i:%05i %0.2fms acc=%0.2f' % (dataset.epoch, i, 1000*(ts2-ts1), acc*100))
+				print('e%02i:%05i %0.2fms acc=%0.2f' % (dataset.epoch, step, 1000*(ts2-ts1), acc*100))
 			run_options = tf.RunOptions(trace_level=tf.RunOptions.FULL_TRACE)
 			run_metadata = tf.RunMetadata()
 		else:
 			run_options = None
 			run_metadata = None
-		xs, ys = dataset.next_batch()
-		l = np.random.normal(0, 1, size=(dataset.BATCH,LATENT) )
-		summary, _, generated_calc = sess.run(
-			[merged, train_adam, generated], feed_dict={ x: xs, y_true: ys, keep_prob: 0.7, latent: l },
+
+		d_real, d_labels = dataset.next_batch()
+		d_latent         = np.random.normal(0, 1, size=(dataset.BATCH,LATENT) )
+		d_class          = np.zeros( (2*dataset.BATCH,dataset.LABELS), dtype=np.float32 )
+		d_class[:dataset.BATCH] = d_labels
+		real_or_fake     = np.zeros( (2*dataset.BATCH,2), dtype=np.float32 )
+		real_or_fake[:dataset.BATCH] = 1
+		real_or_fake[dataset.BATCH:] = 0
+
+		for b in range(dataset.BATCH):
+			i = d_latent[b,:dataset.LABELS].argmax()
+			d_latent[b,:dataset.LABELS] = 0
+			d_latent[b,i] = 1
+			d_class[b+dataset.BATCH,i] = 1
+
+		summary, _, _, real_concat_fake_export, classification_export = sess.run(
+			[merged, adam_discriminator, adam_generator, real_concat_fake, classification_logits],
+			feed_dict = {
+				real: d_real,
+				latent_placeholder: d_latent,
+				classification_true: d_class,
+				real_or_fake_true: real_or_fake, 
+				},
 			options=run_options,
 			run_metadata=run_metadata)
 
-		#summary2 = tf.summary.image("generated", generated, 1)
-		#gen_images = sess.run( [], feed_dict={ latent: l } )
-
 		if run_metadata:
-			train_writer.add_run_metadata(run_metadata, 'step%03d' % i)
+			train_writer.add_run_metadata(run_metadata, 'step%05i' % step)
 			#train_writer.add_summary(s2)
-			train_writer.add_summary(summary, i)
+		train_writer.add_summary(summary, step)
 		ts1 = ts2
 
-		#summary, _ = sess.run([merged, train_adam], feed_dict=feed_classifier(True))
-		#train_writer.add_summary(summary, i)
+		datasets.batch_to_jpeg(dataset, real_concat_fake_export, classification_export)
+
+		#summary2 = tf.summary.image("fake", fake, 1)
+		#summary, _ = sess.run([merged, adam_discriminator], feed_dict=feed_classifier(True))
+		#train_writer.add_summary(summary, step)
 		#summary2 = tf.Summary()
-		#summary2.image("generated", gen_images, 1)
+		#summary2.image("fake", gen_images, 1)
 
 	train_writer.close()
 	test_writer.close()
