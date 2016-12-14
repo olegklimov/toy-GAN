@@ -228,20 +228,20 @@ def do_all():
 		tf.summary.scalar('real_or_fake_accuracy', real_or_fake_accuracy)
 		tf.summary.histogram('real_or_fake_logits', real_or_fake_logits)
 
-	# adams
-	with tf.name_scope('adam_discriminator'):
-		adam_discriminator = tf.train.AdamOptimizer(0.00005, beta1=0.5).minimize(
-			0.1*classification_loss + real_or_fake_loss,
-			var_list=discriminator_learnable)
-	with tf.name_scope('adam_generator'):
-		adam_generator = tf.train.AdamOptimizer(0.00005, beta1=0.5).minimize(
-			0.1*classification_loss - real_or_fake_loss,
-			var_list=generator_learnable)
-
 	# summary
 	merged = tf.summary.merge_all()
 	train_writer = tf.summary.FileWriter(LOG_TRAIN_DIR, sess.graph)
 	test_writer = tf.summary.FileWriter(LOG_TEST_DIR)
+
+	# adams
+	with tf.name_scope('adam_discriminator'):
+		adam_discriminator = tf.train.AdamOptimizer(0.00002, beta1=0.5).minimize(
+			real_or_fake_loss,
+			var_list=discriminator_learnable)
+	with tf.name_scope('adam_generator'):
+		adam_generator = tf.train.AdamOptimizer(0.00005, beta1=0.5).minimize(
+			(-1.0)*real_or_fake_loss,
+			var_list=generator_learnable)
 
 	tf.global_variables_initializer().run()
 
@@ -261,9 +261,12 @@ def do_all():
 			run_metadata = None
 
 		d_real, d_labels = dataset.next_batch()
+		label_leak = 0.2
 		d_latent         = np.random.normal(0, 1, size=(dataset.BATCH,LATENT) )
 		d_class          = np.zeros( (2*dataset.BATCH,dataset.LABELS), dtype=np.float32 )
-		d_class[:dataset.BATCH] = d_labels*0.9 + 0.1/dataset.LABELS
+		d_class[:dataset.BATCH] = d_labels*(1-label_leak-label_leak/dataset.LABELS)
+		d_class[:,:] += label_leak/dataset.LABELS
+		
 		real_or_fake     = np.zeros( (2*dataset.BATCH,2), dtype=np.float32 )
 		real_or_fake[:dataset.BATCH,0] = 0.7
 		real_or_fake[:dataset.BATCH,1] = 0.3
@@ -274,7 +277,8 @@ def do_all():
 			i = d_latent[b,:dataset.LABELS].argmax()
 			d_latent[b,:dataset.LABELS] = 0
 			d_latent[b,i] = 1
-			d_class[b+dataset.BATCH,i] = 0.9
+			d_class[b+dataset.BATCH,i] = 1-label_leak
+		print(d_class)
 
 		summary, _, _, real_concat_fake_export, classification_export = sess.run(
 			[merged, adam_discriminator, adam_generator, real_concat_fake, classification_logits],
