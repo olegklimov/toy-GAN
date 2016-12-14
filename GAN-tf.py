@@ -42,13 +42,13 @@ def dense_layer(learnable, input_tensor, input_dim, output_dim, act_fun=tf.nn.re
 	#with tf.name_scope('Wx_plus_b'):
 	preactivate = tf.matmul(input_tensor, weights) + biases
 	#tf.summary.histogram('pre_activations', preactivate)
-	activations = act_fun(preactivate, name='activation')
+	activations = act_fun(preactivate)
 	tf.summary.histogram('activations', activations)
 	learnable.append(weights)
 	learnable.append(biases)
 	return activations
 
-def conv_layer(learnable, input, kernel_shape, bias_shape, stride=1, act_fun=tf.nn.relu):
+def conv_layer(learnable, input, kernel_shape, bias_shape, stride=1, act_fun=tf.nn.relu, want_bn=True):
 	with tf.name_scope('weights'):
 		weights = tf.get_variable("weights", kernel_shape, initializer=glorot_normal(kernel_shape))
 		variable_summaries(weights)
@@ -57,25 +57,31 @@ def conv_layer(learnable, input, kernel_shape, bias_shape, stride=1, act_fun=tf.
 		variable_summaries(biases)
 	conv    = tf.nn.convolution(input, weights, strides=[stride,stride], padding='SAME')
 	pre_act = conv + biases
-	#pic_shape = act.get_shape()
-	n_in  = kernel_shape[-2]
-	n_out = kernel_shape[-1]
 
-	#bn_mean     = tf.get_variable("bn_mean", batch_mean, initializer=tf.constant_initializer(0.0))
-	#bn_variance = tf.get_variable("bn_variance", batch_var, initializer=tf.constant_initializer(0.5))
-	#beta  = tf.Variable(tf.constant(0.0, shape=[n_out]), name='beta',  trainable=False)
-        #gamma = tf.Variable(tf.constant(1.0, shape=[n_out]), name='gamma', trainable=False)
-	#ema = tf.train.ExponentialMovingAverage(decay=0.5)
-	# https://gist.github.com/tomokishii/0ce3bdac1588b5cca9fa5fbdf6e1c412
+	if want_bn:
+		#pic_shape = act.get_shape()
+		n_in  = kernel_shape[-2]
+		n_out = kernel_shape[-1]
 
-	batch_mean, batch_var = tf.nn.moments(pre_act, [0,1,2], name='moments', keep_dims=True)
-	#for so-called "global normalization", used with convolutional filters with shape [batch, height, width, depth], pass axes=[0, 1, 2].
-	#for simple batch normalization pass axes=[0] (batch only).
+		#bn_mean     = tf.get_variable("bn_mean", batch_mean, initializer=tf.constant_initializer(0.0))
+		#bn_variance = tf.get_variable("bn_variance", batch_var, initializer=tf.constant_initializer(0.5))
+		#beta  = tf.Variable(tf.constant(0.0, shape=[n_out]), name='beta',  trainable=False)
+		#gamma = tf.Variable(tf.constant(1.0, shape=[n_out]), name='gamma', trainable=False)
+		#ema = tf.train.ExponentialMovingAverage(decay=0.5)
+		# https://gist.github.com/tomokishii/0ce3bdac1588b5cca9fa5fbdf6e1c412
 
-	bn = tf.nn.batch_normalization(pre_act, batch_mean, batch_var, offset=None, scale=None, variance_epsilon=0.01, name="bn")
+		batch_mean, batch_var = tf.nn.moments(pre_act, [0,1,2], name='moments', keep_dims=True)
+		#for so-called "global normalization", used with convolutional filters with shape [batch, height, width, depth], pass axes=[0, 1, 2].
+		#for simple batch normalization pass axes=[0] (batch only).
+
+		bn = tf.nn.batch_normalization(pre_act, batch_mean, batch_var, offset=None, scale=None, variance_epsilon=0.01, name="bn")
+		ret = act_fun(bn)
+	else:
+		ret = act_fun(pre_act)
+
 	learnable.append(weights)
 	learnable.append(biases)
-	return act_fun(bn)
+	return ret
 
 def deconvolution_layer(learnable, x, kernel_shape, bias_shape, stride, output_shape, act_fun=tf.nn.relu):
 	with tf.name_scope('weights'):
@@ -102,30 +108,30 @@ def discriminator_network(learnable, x):
 	h,w = dataset.H,dataset.W
 
 	with tf.variable_scope('conv1') as scope:
-		conv1_relu = conv_layer(learnable, x, [3,3,features,32], [32])
+		conv1_relu = conv_layer(learnable, x, [3,3,features,32], [32], act_fun=leaky_relu)
 		features = 32
 
 	with tf.variable_scope('conv2_1') as scope:
 		stride = 2
-		conv2_1_relu = conv_layer(learnable, conv1_relu, [3,3,features,64], [64], stride=stride)
+		conv2_1_relu = conv_layer(learnable, conv1_relu, [3,3,features,64], [64], stride=stride, act_fun=leaky_relu)
 		h //= stride
 		w //= stride
 		features = 64
 	with tf.variable_scope('conv2_2') as scope:
-		conv2_2_relu = conv_layer(learnable, conv2_1_relu, [3,3,features,64], [64])
+		conv2_2_relu = conv_layer(learnable, conv2_1_relu, [3,3,features,64], [64], act_fun=leaky_relu)
 
 	with tf.variable_scope('conv3_1') as scope:
 		stride = 2
-		conv3_1_relu = conv_layer(learnable, conv2_2_relu, [3,3,features,128], [128], stride=stride)
+		conv3_1_relu = conv_layer(learnable, conv2_2_relu, [3,3,features,128], [128], stride=stride, act_fun=leaky_relu)
 		h //= stride
 		w //= stride
 		features = 128
 	with tf.variable_scope('conv3_2') as scope:
-		conv3_2_relu = conv_layer(learnable, conv3_1_relu, [3,3,features,128], [128])
+		conv3_2_relu = conv_layer(learnable, conv3_1_relu, [3,3,features,128], [128], act_fun=leaky_relu)
 
 	with tf.variable_scope('conv4_1') as scope:
 		stride = 2
-		conv4_1_relu = conv_layer(learnable, conv3_2_relu, [3,3,features,256], [256], stride=stride)
+		conv4_1_relu = conv_layer(learnable, conv3_2_relu, [3,3,features,256], [256], stride=stride, act_fun=leaky_relu)
 		h //= stride
 		w //= stride
 		features = 256
@@ -134,14 +140,15 @@ def discriminator_network(learnable, x):
 	flat = tf.reshape(conv4_1_relu, [-1, h*w*features])
 
 	with tf.variable_scope("dense1"):
-		dense1 = dense_layer(learnable, flat, h*w*features, 256)
+		dense1 = dense_layer(learnable, flat, h*w*features, 256, act_fun=leaky_relu)
 
 	# without another dense 10-way layer, called is supposed to add one or more of these
 	return dense1, 256
 
 def generator_network(learnable, l):
+	act = tf.nn.relu
 	with tf.variable_scope("proj"):
-		proj = dense_layer(learnable, l, LATENT, 1024*4*4)
+		proj = dense_layer(learnable, l, LATENT, 1024*4*4, act_fun=act)
 	with tf.variable_scope("unflat"):
 		not_flat = tf.reshape(proj, [-1, 4, 4, 1024])
 	features = 1024
@@ -150,28 +157,28 @@ def generator_network(learnable, l):
 	want_features = 512
 	with tf.variable_scope("deconv1"):
 		batch_size = tf.shape(l)[0]
-		dconv1 = deconvolution_layer(learnable, not_flat, [3,3,want_features,features], [want_features], 2, [batch_size,2*h,2*w,want_features])
+		dconv1 = deconvolution_layer(learnable, not_flat, [3,3,want_features,features], [want_features], 2, [batch_size,2*h,2*w,want_features], act_fun=act)
 	w,h = 8,8
 	features = want_features
 
 	want_features = 256
 	with tf.variable_scope("deconv2"):
 		batch_size = tf.shape(l)[0]
-		dconv2 = deconvolution_layer(learnable, dconv1, [3,3,want_features,features], [want_features], 2, [batch_size,2*h,2*w,want_features])
+		dconv2 = deconvolution_layer(learnable, dconv1, [3,3,want_features,features], [want_features], 2, [batch_size,2*h,2*w,want_features], act_fun=act)
 	w,h = 16,16
 	features = want_features
 
 	want_features = 128
 	with tf.variable_scope("deconv3"):
 		batch_size = tf.shape(l)[0]
-		dconv3 = deconvolution_layer(learnable, dconv2, [3,3,want_features,features], [want_features], 2, [batch_size,2*h,2*w,want_features])
+		dconv3 = deconvolution_layer(learnable, dconv2, [3,3,want_features,features], [want_features], 2, [batch_size,2*h,2*w,want_features], act_fun=act)
 	features = want_features
 
 	want_features = dataset.COLORS
 	with tf.variable_scope('deconv4') as scope:
-		dconv4 = conv_layer(learnable, dconv3, [3,3,features,want_features], [want_features])
+		dconv4 = conv_layer(learnable, dconv3, [3,3,features,want_features], [want_features], act_fun=tf.nn.tanh, want_bn=False)
 
-	return dconv4
+	return dconv4  # *1.1 make data -1.1 .. +1.1 to reach 1 easier
 
 def do_all():
 	config = tf.ConfigProto()
@@ -187,7 +194,6 @@ def do_all():
 		real_or_fake_true = tf.placeholder(tf.float32, [None,2], name='real_or_fake_true')
 
 		latent_placeholder = tf.placeholder(tf.float32, [None,LATENT], name='latent')
-		#tf.summary.image('input', real, 4)
 
 	generator_learnable = []
 	fake = generator_network(generator_learnable, latent_placeholder)
@@ -204,28 +210,29 @@ def do_all():
 	classification_loss     = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(classification, classification_true))
 	classification_correct  = tf.equal(tf.argmax(classification, 1), tf.argmax(classification_true, 1))
 	classification_accuracy = tf.reduce_mean(tf.cast(classification_correct, tf.float32))
-	#with tf.name_scope('classification_correct'):
-	#with tf.name_scope('classification_accuracy'):
 	tf.summary.scalar('classification_loss', classification_loss)
 	tf.summary.scalar('classification_accuracy', classification_accuracy)
+	tf.summary.histogram('classification_logits', classification_logits)
 
 	# real or fake
 	with tf.variable_scope("dense_real_or_fake"):
 		real_or_fake = dense_layer(discriminator_learnable, disc_wide_code, disc_width, 2, act_fun=tf.identity)
+	real_or_fake_logits  = tf.nn.softmax(real_or_fake)
 	real_or_fake_loss     = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(real_or_fake, real_or_fake_true))
 	real_or_fake_correct  = tf.equal(tf.argmax(real_or_fake, 1), tf.argmax(real_or_fake_true, 1))
 	real_or_fake_accuracy = tf.reduce_mean(tf.cast(real_or_fake_correct, tf.float32))
 	tf.summary.scalar('real_or_fake_loss', real_or_fake_loss)
 	tf.summary.scalar('real_or_fake_accuracy', real_or_fake_accuracy)
+	tf.summary.histogram('real_or_fake_logits', real_or_fake_logits)
 
 	# adams
 	with tf.name_scope('adam_discriminator'):
-		adam_discriminator = tf.train.AdamOptimizer(0.0001).minimize(
-			classification_loss + real_or_fake_loss,
+		adam_discriminator = tf.train.AdamOptimizer(0.00005, beta1=0.5).minimize(
+			0.1*classification_loss + real_or_fake_loss,
 			var_list=discriminator_learnable)
 	with tf.name_scope('adam_generator'):
-		adam_generator = tf.train.AdamOptimizer(0.0001).minimize(
-			classification_loss - real_or_fake_loss,
+		adam_generator = tf.train.AdamOptimizer(0.00005, beta1=0.5).minimize(
+			0.1*classification_loss - real_or_fake_loss,
 			var_list=generator_learnable)
 
 	# summary
@@ -234,7 +241,6 @@ def do_all():
 	test_writer = tf.summary.FileWriter(LOG_TEST_DIR)
 
 	tf.global_variables_initializer().run()
-	#tf.summary.image('fake', fake, 4)
 
 	ts1 = 0
 	for step in range(MAX_STEPS):
@@ -254,16 +260,18 @@ def do_all():
 		d_real, d_labels = dataset.next_batch()
 		d_latent         = np.random.normal(0, 1, size=(dataset.BATCH,LATENT) )
 		d_class          = np.zeros( (2*dataset.BATCH,dataset.LABELS), dtype=np.float32 )
-		d_class[:dataset.BATCH] = d_labels
+		d_class[:dataset.BATCH] = d_labels*0.9 + 0.1/dataset.LABELS
 		real_or_fake     = np.zeros( (2*dataset.BATCH,2), dtype=np.float32 )
-		real_or_fake[:dataset.BATCH] = 1
-		real_or_fake[dataset.BATCH:] = 0
+		real_or_fake[:dataset.BATCH,0] = 0.9
+		real_or_fake[:dataset.BATCH,1] = 0.1
+		real_or_fake[dataset.BATCH:,0] = 0.1
+		real_or_fake[dataset.BATCH:,1] = 0.9
 
 		for b in range(dataset.BATCH):
 			i = d_latent[b,:dataset.LABELS].argmax()
 			d_latent[b,:dataset.LABELS] = 0
 			d_latent[b,i] = 1
-			d_class[b+dataset.BATCH,i] = 1
+			d_class[b+dataset.BATCH,i] = 0.9
 
 		summary, _, _, real_concat_fake_export, classification_export = sess.run(
 			[merged, adam_discriminator, adam_generator, real_concat_fake, classification_logits],
@@ -278,17 +286,11 @@ def do_all():
 
 		if run_metadata:
 			train_writer.add_run_metadata(run_metadata, 'step%05i' % step)
-			#train_writer.add_summary(s2)
 		train_writer.add_summary(summary, step)
 		ts1 = ts2
 
-		datasets.batch_to_jpeg(dataset, real_concat_fake_export, classification_export)
-
-		#summary2 = tf.summary.image("fake", fake, 1)
-		#summary, _ = sess.run([merged, adam_discriminator], feed_dict=feed_classifier(True))
-		#train_writer.add_summary(summary, step)
-		#summary2 = tf.Summary()
-		#summary2.image("fake", gen_images, 1)
+		if i % 10 == 0:
+			datasets.batch_to_jpeg(dataset, real_concat_fake_export, classification_export)
 
 	train_writer.close()
 	test_writer.close()
@@ -305,9 +307,5 @@ if __name__ == '__main__':
 	shutil.rmtree(LOG_TRAIN_DIR, ignore_errors=True)
 	os.makedirs(LOG_TEST_DIR)
 	os.makedirs(LOG_TRAIN_DIR)
-
-	#from tensorflow.python.client import device_lib
-	#print( device_lib.list_local_devices() )
-	unparsed = []
-	tf.app.run(main=main) #, argv=[sys.argv[0]] + unparsed)
+	tf.app.run(main=main)
 
