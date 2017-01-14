@@ -42,17 +42,28 @@ def deconv_wn(x, name, kernel_shape, num_filters, stride, wn_init):
         wn_init.all_trainable_vars += [v, g, b]
     return x
 
+def bn(x, name=None):
+    batch_mean, batch_var = tf.nn.moments(x, [0,1,2])
+    #for so-called "global normalization", used with convolutional filters with shape [batch, height, width, depth], pass axes=[0, 1, 2].
+    #for simple batch normalization pass axes=[0] (batch only).
+    x = tf.nn.batch_normalization(x, batch_mean, batch_var, offset=None, scale=None, variance_epsilon=0.0001, name=name)
+    return x
+
 def discriminator_network(x, wn_init):
     h, w, features = x.get_shape().as_list()[-3:]
     print("discriminator input h w f = %i %i %i" % (h,w,features))
-    x = leaky_relu( W.conv2d_wn(x,  32, "conv11", [3,3], [1,1], wn_init=wn_init) )
-    x = leaky_relu( W.conv2d_wn(x,  64, "conv21", [3,3], [2,2], wn_init=wn_init) )
-    x = leaky_relu( W.conv2d_wn(x, 128, "conv31", [3,3], [2,2], wn_init=wn_init) )
-    x = leaky_relu( W.conv2d_wn(x, 256, "conv41", [3,3], [2,2], wn_init=wn_init) )
+    x = U.conv2d(x,  32, "conv11", [3,3], [1,1])
+    x = leaky_relu(x)
+    x = U.conv2d(x,  64, "conv21", [3,3], [2,2])
+    x = leaky_relu(bn(x))
+    x = U.conv2d(x, 128, "conv31", [3,3], [2,2])
+    x = leaky_relu(bn(x))
+    x = U.conv2d(x, 256, "conv41", [3,3], [2,2])
+    x = leaky_relu(bn(x))
     batch, h, w, features = x.get_shape().as_list()
     print("discriminator final b h w f = %s %i %i %i -> flat %i" % (batch,h,w,features, h*w*features))
     x = tf.reshape(x, [-1,h*w*features])
-    x = leaky_relu( W.dense_wn(x, 256, "dense1", wn_init=wn_init) )
+    x = leaky_relu( U.dense(x, 256, "dense1") )
     return x
 
 def generator_network(l, wn_init):
@@ -202,7 +213,7 @@ def do_all():
 #            [adam_generator],
 #            feed_dict=feed_dict)
 
-        if step % 10 == 0:
+        if step % 100 == 0:
             summary, _, _ = sess.run(
                 [merged, adam_discriminator, adam_generator],
                 options=run_options,
