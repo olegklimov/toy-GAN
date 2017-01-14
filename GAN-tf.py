@@ -4,12 +4,12 @@ import numpy as np
 
 import datasets
 dataset = datasets.Dataset()
-dataset.BATCH = 100
+dataset.BATCH = 80
 datasets.mnist(dataset)
 #cifar10()
 print("HxW=%ix%i" % (dataset.W,dataset.H))
 
-MAX_STEPS = 5000
+MAX_STEPS = 9000
 LOG_DIR = "ramdisk/log"
 LATENT = 150
 
@@ -39,11 +39,9 @@ def dense_layer(learnable, input_tensor, input_dim, output_dim, act_fun=tf.nn.re
 	with tf.name_scope('biases'):
 		biases = tf.get_variable("bias_variable", [output_dim], initializer=tf.constant_initializer(0.0))
 		variable_summaries(biases)
-	#with tf.name_scope('Wx_plus_b'):
 	preactivate = tf.matmul(input_tensor, weights) + biases
-	#tf.summary.histogram('pre_activations', preactivate)
 	activations = act_fun(preactivate)
-	tf.summary.histogram('activations', activations)
+	#tf.summary.histogram('activations', activations)
 	learnable.append(weights)
 	learnable.append(biases)
 	return activations
@@ -70,11 +68,11 @@ def conv_layer(learnable, input, kernel_shape, bias_shape, stride=1, act_fun=tf.
 		#ema = tf.train.ExponentialMovingAverage(decay=0.5)
 		# https://gist.github.com/tomokishii/0ce3bdac1588b5cca9fa5fbdf6e1c412
 
-		batch_mean, batch_var = tf.nn.moments(pre_act, [0,1,2], name='moments', keep_dims=True)
+		batch_mean, batch_var = tf.nn.moments(pre_act, [0,1,2], name='moments') #, keep_dims=True)
 		#for so-called "global normalization", used with convolutional filters with shape [batch, height, width, depth], pass axes=[0, 1, 2].
 		#for simple batch normalization pass axes=[0] (batch only).
 
-		bn = tf.nn.batch_normalization(pre_act, batch_mean, batch_var, offset=None, scale=None, variance_epsilon=0.01, name="bn")
+		bn = tf.nn.batch_normalization(pre_act, batch_mean, batch_var, offset=None, scale=None, variance_epsilon=0.0001, name="bn")
 		ret = act_fun(bn)
 	else:
 		ret = act_fun(pre_act)
@@ -182,7 +180,7 @@ def generator_network(learnable, l):
 
 def do_all():
 	config = tf.ConfigProto()
-	config.gpu_options.per_process_gpu_memory_fraction = 0.8
+	#config.gpu_options.per_process_gpu_memory_fraction = 0.8
 	#config.gpu_options.allow_growth = True
 	#config=tf.ConfigProto(log_device_placement=True))
 	sess = tf.InteractiveSession(config=config)
@@ -214,7 +212,7 @@ def do_all():
 		classification_accuracy = tf.reduce_mean(tf.cast(classification_correct, tf.float32))
 		tf.summary.scalar('classification_loss', classification_loss)
 		tf.summary.scalar('classification_accuracy', classification_accuracy)
-		tf.summary.histogram('classification_logits', classification_logits)
+		#tf.summary.histogram('classification_logits', classification_logits)
 
 	# real or fake
 	with tf.name_scope("real_or_fake"):
@@ -226,7 +224,7 @@ def do_all():
 		real_or_fake_accuracy = tf.reduce_mean(tf.cast(real_or_fake_correct, tf.float32))
 		tf.summary.scalar('real_or_fake_loss', real_or_fake_loss)
 		tf.summary.scalar('real_or_fake_accuracy', real_or_fake_accuracy)
-		tf.summary.histogram('real_or_fake_logits', real_or_fake_logits)
+		#tf.summary.histogram('real_or_fake_logits', real_or_fake_logits)
 
 	# summary
 	merged = tf.summary.merge_all()
@@ -235,15 +233,17 @@ def do_all():
 
 	# adams
 	with tf.name_scope('adam_discriminator'):
-		adam_discriminator = tf.train.AdamOptimizer(0.00002, beta1=0.5).minimize(
-			real_or_fake_loss,
+		adam_discriminator = tf.train.AdamOptimizer(0.00005, beta1=0.5).minimize(
+			classification_loss + real_or_fake_loss,
 			var_list=discriminator_learnable)
 	with tf.name_scope('adam_generator'):
 		adam_generator = tf.train.AdamOptimizer(0.00005, beta1=0.5).minimize(
-			(-1.0)*real_or_fake_loss,
+			classification_loss + (-1.0)*real_or_fake_loss,
 			var_list=generator_learnable)
 
 	tf.global_variables_initializer().run()
+
+# stop_gradient(2*x) - x
 
 	ts1 = 0
 	for step in range(MAX_STEPS):
@@ -261,12 +261,14 @@ def do_all():
 			run_metadata = None
 
 		d_real, d_labels = dataset.next_batch()
+		d_real  = d_real.copy()
+		d_real[:,:,:,:] += np.random.uniform(low=-1.0, high=+1.0, size=(dataset.BATCH,dataset.H,dataset.W,1))
 		label_leak = 0.2
 		d_latent         = np.random.normal(0, 1, size=(dataset.BATCH,LATENT) )
 		d_class          = np.zeros( (2*dataset.BATCH,dataset.LABELS), dtype=np.float32 )
 		d_class[:dataset.BATCH] = d_labels*(1-label_leak-label_leak/dataset.LABELS)
 		d_class[:,:] += label_leak/dataset.LABELS
-		
+
 		real_or_fake     = np.zeros( (2*dataset.BATCH,2), dtype=np.float32 )
 		real_or_fake[:dataset.BATCH,0] = 0.7
 		real_or_fake[:dataset.BATCH,1] = 0.3
@@ -278,15 +280,14 @@ def do_all():
 			d_latent[b,:dataset.LABELS] = 0
 			d_latent[b,i] = 1
 			d_class[b+dataset.BATCH,i] = 1-label_leak
-		print(d_class)
 
-		summary, _, _, real_concat_fake_export, classification_export = sess.run(
-			[merged, adam_discriminator, adam_generator, real_concat_fake, classification_logits],
+		summary, _, _ = sess.run(
+			[merged, adam_discriminator, adam_generator],
 			feed_dict = {
 				real: d_real,
 				latent_placeholder: d_latent,
 				classification_true: d_class,
-				real_or_fake_true: real_or_fake, 
+				real_or_fake_true: real_or_fake,
 				},
 			options=run_options,
 			run_metadata=run_metadata)
@@ -295,8 +296,22 @@ def do_all():
 			train_writer.add_run_metadata(run_metadata, 'step%05i' % step)
 		train_writer.add_summary(summary, step)
 		ts1 = ts2
+		sys.stdout.write(".")
+		sys.stdout.flush()
 
-		if i % 10 == 0:
+		if step % 50 == 0:
+			sys.stdout.write("j")
+			sys.stdout.flush()
+			real_concat_fake_export, classification_export = sess.run(
+				[real_concat_fake, classification_logits],
+				feed_dict = {
+					real: d_real,
+					latent_placeholder: d_latent,
+					classification_true: d_class,
+					real_or_fake_true: real_or_fake,
+					})
+			sys.stdout.write("j")
+			sys.stdout.flush()
 			datasets.batch_to_jpeg(dataset, real_concat_fake_export, classification_export)
 
 	train_writer.close()
