@@ -20,7 +20,7 @@ def glorot_normal(shape):
     return tf.random_normal_initializer(stddev=s)
 
 def leaky_relu(x):
-    return tf.maximum(0.1*x, x)
+    return tf.maximum(0.2*x, x)
 
 def deconv_wn(x, name, kernel_shape, num_filters, stride, wn_init):
     batch_size,h,w,features = x.get_shape().as_list()
@@ -69,10 +69,11 @@ def discriminator_network(x, wn_init):
 def generator_network(l, wn_init):
     batch_size,features = l.get_shape().as_list()
     print("generator input b f = %s %i" % (batch_size,features))
-    h,w,features = 4,4,512
-    x = tf.nn.relu( W.dense_wn(l, h*w*features, "latent_fc", wn_init=wn_init) )
+    h,w,features = 4,4,256
+    x = tf.nn.relu( W.dense_wn(l, 2*h*w*features, "latent_fc1", wn_init=wn_init) )
+    x = tf.nn.relu( W.dense_wn(l,   h*w*features, "latent_fc2", wn_init=wn_init) )
     x = tf.reshape(x, [-1,h,w,features])
-    want_features = 512
+    want_features = 256
     x = tf.nn.relu( deconv_wn(x, "deconv1", [3,3,want_features,features], features, 2, wn_init=wn_init) )
     features, want_features = want_features, 256
     x = tf.nn.relu( deconv_wn(x, "deconv2", [3,3,want_features,features], features, 2, wn_init=wn_init) )
@@ -159,6 +160,7 @@ def do_all():
 
     ts1 = 0
     first_batch = True
+    stable_feed_dict = None
     for step in range(MAX_STEPS):
         if step % 100 == 0:
             #summary, acc = sess.run([merged, classification_accuracy], feed_dict={ real: dataset.X_test, classification_true: dataset.y_test })
@@ -176,7 +178,7 @@ def do_all():
 
         d_real, d_labels = dataset.next_batch()
         d_real  = d_real.copy()
-        d_real[:,:,:,:] += np.random.normal(0, 0.5, size=(dataset.BATCH,dataset.H,dataset.W,1))
+        #d_real[:,:,:,:] += np.random.normal(0, 0.5, size=(dataset.BATCH,dataset.H,dataset.W,1))
         label_leak = 0.0
         d_latent         = np.random.normal(0, 1, size=(dataset.BATCH,LATENT) )
         d_class          = np.zeros( (2*dataset.BATCH,dataset.LABELS), dtype=np.float32 )
@@ -185,7 +187,7 @@ def do_all():
 
         real_or_fake     = np.zeros( (2*dataset.BATCH,2), dtype=np.float32 )
         real_or_fake[:dataset.BATCH,0] = 0.9
-        real_or_fake[:dataset.BATCH,1] = 0
+        real_or_fake[:dataset.BATCH,1] = 0.1
         real_or_fake[dataset.BATCH:,0] = 0
         real_or_fake[dataset.BATCH:,1] = 1.0
 
@@ -208,10 +210,7 @@ def do_all():
             #gen_wm_init.data_based_initialization(feed_dict)
             #disc_wm_init.data_based_initialization({ real: dataset.X_test })
             class_wm_init.data_based_initialization({ real: dataset.X_test })
-
-#        _ = sess.run(
-#            [adam_generator],
-#            feed_dict=feed_dict)
+            stable_feed_dict = feed_dict
 
         if step % 100 == 0:
             summary, _, _ = sess.run(
@@ -246,6 +245,12 @@ def do_all():
             sys.stdout.write("j")
             sys.stdout.flush()
             datasets.batch_to_jpeg(dataset, real_concat_fake_export, classification_export)
+
+        if 0:
+            real_concat_fake_export, classification_export = sess.run(
+                [real_concat_fake, classification_logits],
+                feed_dict = stable_feed_dict)
+            datasets.batch_to_jpeg(dataset, real_concat_fake_export, classification_export, "movie/f%06i.png" % step)
 
     train_writer.close()
     test_writer.close()

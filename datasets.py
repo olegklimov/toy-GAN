@@ -56,6 +56,14 @@ def celebA(dataset):
 
 
 ###################
+import PIL
+import PIL.Image as Image
+import PIL.ImageDraw as ImageDraw
+import PIL.ImageFont as ImageFont
+font = ImageFont.truetype('/usr/share/fonts/truetype/freefont/FreeSansBold.ttf', 10)
+import scipy
+import scipy.misc
+import scipy.misc.pilutil
 
 def batch_to_jpeg(dataset, batch, labels, fn="ramdisk/test.png"):
 	batch_labels_best = []
@@ -67,17 +75,12 @@ def batch_to_jpeg(dataset, batch, labels, fn="ramdisk/test.png"):
 		batch_labels_text.append( dataset.labels_text[best] )
 	W = batch.shape[-2]
 	H = batch.shape[-3]
-	hor_n = 10
+	hor_n = 20
 	ver_n = int( np.ceil(BATCH/hor_n) )
-	BIG_W = W + 48
+	BIG_W = W + 24
 	BIG_H = H + 16
 	pic = np.ones( shape=(3,ver_n*BIG_H,hor_n*BIG_W) )
 
-	import PIL
-	import PIL.Image as Image
-	import PIL.ImageDraw as ImageDraw
-	import PIL.ImageFont as ImageFont
-	font = ImageFont.truetype('/usr/share/fonts/truetype/freefont/FreeSansBold.ttf', 10)
 	for y in range(ver_n):
 		for x in range(hor_n):
 			i = y*hor_n + x
@@ -90,9 +93,6 @@ def batch_to_jpeg(dataset, batch, labels, fn="ramdisk/test.png"):
 				pic[0, y*BIG_H:y*BIG_H+H, x*BIG_W:x*BIG_W+W] = batch[i,:,:,0]
 				pic[1, y*BIG_H:y*BIG_H+H, x*BIG_W:x*BIG_W+W] = batch[i,:,:,1]
 				pic[2, y*BIG_H:y*BIG_H+H, x*BIG_W:x*BIG_W+W] = batch[i,:,:,2]
-	import scipy
-	import scipy.misc
-	import scipy.misc.pilutil
 	image = scipy.misc.toimage(pic, cmin=-1.0, cmax=1.0)
 	draw = ImageDraw.Draw(image)
 	for y in range(ver_n):
