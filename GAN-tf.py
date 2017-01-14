@@ -198,13 +198,13 @@ def do_all():
             #disc_wm_init.data_based_initialization({ real: dataset.X_test })
             class_wm_init.data_based_initialization({ real: dataset.X_test })
 
-        _ = sess.run(
-            [adam_generator],
-            feed_dict=feed_dict)
+#        _ = sess.run(
+#            [adam_generator],
+#            feed_dict=feed_dict)
 
         if step % 10 == 0:
-            summary, _ = sess.run(
-                [merged, adam_discriminator],
+            summary, _, _ = sess.run(
+                [merged, adam_discriminator, adam_generator],
                 options=run_options,
                 feed_dict=feed_dict,
                 run_metadata=run_metadata)
@@ -212,8 +212,8 @@ def do_all():
             #if run_metadata:
             #    train_writer.add_run_metadata(run_metadata, 'step%05i' % step)
         else:
-            _ = sess.run(
-                [adam_discriminator],
+            _, _ = sess.run(
+                [adam_discriminator, adam_generator],
                 options=run_options,
                 feed_dict=feed_dict)
 
