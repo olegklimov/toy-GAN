@@ -111,14 +111,14 @@ def do_all():
     with tf.variable_scope("discriminator_network"):
         last1 = discriminator_network(real, class_wm_init)
         x = U.dense(last1, dataset.LABELS, "dense10", weight_init=U.normc_initializer(1.0))
-        klass_loss     = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(x, klass_true))
+        klass_loss     = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(logits=x, labels=klass_true))
         klass_accuracy = tf.reduce_mean(tf.cast(tf.equal(tf.argmax(x, 1), tf.argmax(klass_true, 1)), tf.float32))
 
         tf.get_variable_scope().reuse_variables()
         last2  = discriminator_network(real_concat_fake, disc_wm_init)
         x = U.dense(last2, dataset.LABELS, "dense10")
         classification_logits   = tf.nn.softmax(x)
-        classification_loss     = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(x, classification_true))
+        classification_loss     = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(logits=x, labels=classification_true))
         classification_accuracy = tf.reduce_mean(tf.cast(tf.equal(tf.argmax(x, 1), tf.argmax(classification_true, 1)), tf.float32))
 
         discriminator_trainable = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, tf.get_variable_scope().name)
@@ -127,7 +127,7 @@ def do_all():
     with tf.variable_scope("disc_losses"):
         x = U.dense(last2, 2, "dense_real_or_fake")
         real_or_fake_logits   = tf.nn.softmax(x)
-        real_or_fake_loss     = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(x, real_or_fake_true))
+        real_or_fake_loss     = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(logits=x, labels=real_or_fake_true))
         real_or_fake_accuracy = tf.reduce_mean(tf.cast(tf.equal(tf.argmax(x, 1), tf.argmax(real_or_fake_true, 1)), tf.float32))
 
     tf.summary.scalar('classification_loss', classification_loss)
