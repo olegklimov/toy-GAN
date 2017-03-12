@@ -26,7 +26,8 @@ def deconv_wn(x, name, kernel_shape, num_filters, stride, wn_init):
     batch_size,h,w,features = x.get_shape().as_list()
     want_features = kernel_shape[-2]
     output_shape = [batch_size,stride*h,stride*w,want_features]
-    v = tf.get_variable(name+"/v", kernel_shape, tf.float32, tf.orthogonal_initializer(0.1))
+    #v = tf.get_variable(name+"/v", kernel_shape, tf.float32, tf.orthogonal_initializer(0.1))
+    v = tf.get_variable(name+"/v", kernel_shape, tf.float32, initializer=tf.random_normal_initializer(0.01))
     g = tf.get_variable(name+"/g", [want_features], tf.float32, tf.constant_initializer(1.0))
     w = tf.reshape(g, [want_features,1]) * v / tf.stop_gradient(tf.sqrt(tf.reduce_sum( tf.square(v), axis=[0,1,2] )))
     b = tf.get_variable(name+"/b", [1,1,1,want_features], tf.float32, initializer=tf.constant_initializer(0.0))
@@ -87,6 +88,7 @@ def generator_network(l, wn_init):
 def do_all():
     config = tf.ConfigProto()
     config.gpu_options.per_process_gpu_memory_fraction = 0.6
+    config.allow_soft_placement = True
     #config.gpu_options.allow_growth = True
     #config=tf.ConfigProto(log_device_placement=True))
     sess = tf.InteractiveSession(config=config)
@@ -256,8 +258,8 @@ def do_all():
     test_writer.close()
 
 def main(args):
-    #with tf.device('/cpu:0'):
-    do_all()
+    with tf.device('/gpu:1'):
+        do_all()
 
 if __name__ == '__main__':
     import shutil, os
